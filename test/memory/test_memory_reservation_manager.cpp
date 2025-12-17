@@ -29,9 +29,6 @@
  * - Run all tests: ./test_executable "[memory_space]"
  */
 
-#include <catch2/catch.hpp>
-
-#include <rmm/device_buffer.hpp>
 #include "memory/common.hpp"
 #include "memory/fixed_size_host_memory_resource.hpp"
 #include "memory/memory_reservation.hpp"
@@ -40,7 +37,10 @@
 #include "memory/reservation_manager_configurator.hpp"
 
 #include <rmm/cuda_stream.hpp>
+#include <rmm/device_buffer.hpp>
 #include <rmm/mr/device/cuda_memory_resource.hpp>
+
+#include <catch2/catch.hpp>
 
 #include <algorithm>
 #include <cstdlib>

@@ -14,18 +14,16 @@
 # the License.
 # =============================================================================
 
-target_sources(cucascade
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/common.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/disk_access_limiter.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/fixed_size_host_memory_resource.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/memory_reservation.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/memory_reservation_manager.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/memory_space.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/null_device_memory_resource.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/reservation_aware_resource_adaptor.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/reservation_manager_configurator.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/stream_pool.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/topology_discovery.cpp
-)
-
+target_sources(
+  cucascade
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/common.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/disk_access_limiter.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/fixed_size_host_memory_resource.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/memory_reservation.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/memory_reservation_manager.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/memory_space.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/null_device_memory_resource.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/reservation_aware_resource_adaptor.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/reservation_manager_configurator.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/stream_pool.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/topology_discovery.cpp)

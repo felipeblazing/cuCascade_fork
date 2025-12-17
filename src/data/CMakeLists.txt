@@ -14,13 +14,11 @@
 # the License.
 # =============================================================================
 
-target_sources(cucascade
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/cpu_data_representation.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/data_batch.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/data_batch_view.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/data_repository.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/data_repository_manager.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/gpu_data_representation.cpp
-)
-
+target_sources(
+  cucascade
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cpu_data_representation.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/data_batch.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/data_batch_view.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/data_repository.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/data_repository_manager.cpp
+          ${CMAKE_CURRENT_SOURCE_DIR}/gpu_data_representation.cpp)

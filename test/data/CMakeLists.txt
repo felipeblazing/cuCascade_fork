@@ -21,5 +21,4 @@ set(TEST_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_data_repository.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_data_repository_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_data_representation.cpp
-    PARENT_SCOPE
-)
+    PARENT_SCOPE)

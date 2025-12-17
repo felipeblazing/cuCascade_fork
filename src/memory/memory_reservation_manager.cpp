@@ -21,9 +21,9 @@
 #include "memory/memory_reservation.hpp"
 #include "memory/memory_space.hpp"
 #include "memory/numa_region_pinned_host_allocator.hpp"
-#include <rmm/mr/device/cuda_async_memory_resource.hpp>
 
 #include <rmm/cuda_device.hpp>
+#include <rmm/mr/device/cuda_async_memory_resource.hpp>
 
 #include <algorithm>
 #include <cstdint>

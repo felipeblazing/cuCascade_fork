@@ -15,7 +15,5 @@
 # =============================================================================
 
 set(TEST_SOURCES
-    ${TEST_SOURCES}
-    ${CMAKE_CURRENT_SOURCE_DIR}/cudf_test_utils.cpp
-    PARENT_SCOPE
-)
+    ${TEST_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/cudf_test_utils.cpp
+    PARENT_SCOPE)

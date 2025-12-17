@@ -19,9 +19,9 @@
 
 #include "memory/common.hpp"
 #include "memory/topology_discovery.hpp"
-#include <rmm/mr/device/device_memory_resource.hpp>
 
 #include <rmm/cuda_device.hpp>
+#include <rmm/mr/device/device_memory_resource.hpp>
 
 #include <numa.h>
 

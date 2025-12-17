@@ -17,11 +17,11 @@
 cmake_minimum_required(VERSION 3.26.4 FATAL_ERROR)
 
 # Set project name and languages
-project(cuCascade
-    VERSION 0.1.0
-    LANGUAGES C CXX CUDA
-    DESCRIPTION "GPU memory management and data representation library"
-)
+project(
+  cuCascade
+  VERSION 0.1.0
+  LANGUAGES C CXX CUDA
+  DESCRIPTION "GPU memory management and data representation library")
 
 # C++ standard
 set(CMAKE_CXX_STANDARD 20)
@@ -56,33 +56,28 @@ add_subdirectory(src/memory)
 add_subdirectory(src/data)
 
 # Set include directories for the library
-target_include_directories(cucascade
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:include>
-)
+target_include_directories(
+  cucascade PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                   $<INSTALL_INTERFACE:include>)
 
 # Link dependencies
-target_link_libraries(cucascade
-    PUBLIC
-        rmm::rmm
-        cudf::cudf
-        CUDA::cudart
-        CUDA::nvml
-        Threads::Threads
-        fmt::fmt
-        numa
-)
-
+target_link_libraries(
+  cucascade
+  PUBLIC rmm::rmm
+         cudf::cudf
+         CUDA::cudart
+         CUDA::nvml
+         Threads::Threads
+         fmt::fmt
+         numa)
 
 # Set CUDA architectures
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES 75 80 86 90)
+  set(CMAKE_CUDA_ARCHITECTURES 75 80 86 90)
 endif()
 
 # Build tests if enabled
 if(BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(test)
+  enable_testing()
+  add_subdirectory(test)
 endif()
-

@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#include <catch2/catch.hpp>
-
 #include <cudf/contiguous_split.hpp>
 #include <cudf/table/table.hpp>
 
@@ -24,6 +22,8 @@
 #include <rmm/device_buffer.hpp>
 
 #include <cuda_runtime_api.h>
+
+#include <catch2/catch.hpp>
 
 #include <cstdint>
 #include <cstring>

@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-#include <catch2/catch.hpp>
 #include "data/common.hpp"
 #include "data/data_batch.hpp"
 #include "data/data_batch_view.hpp"
@@ -23,6 +22,8 @@
 #include "data/data_repository_manager.hpp"
 #include "memory/null_device_memory_resource.hpp"
 #include "memory/reservation_aware_resource_adaptor.hpp"
+
+#include <catch2/catch.hpp>
 
 #include <map>
 #include <memory>

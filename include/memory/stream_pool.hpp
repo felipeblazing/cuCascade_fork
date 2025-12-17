@@ -18,7 +18,6 @@
 #pragma once
 
 #include <rmm/cuda_device.hpp>
-
 #include <rmm/cuda_stream.hpp>
 #include <rmm/cuda_stream_view.hpp>
 

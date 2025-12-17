@@ -17,8 +17,6 @@
 
 #include "memory/memory_space.hpp"
 
-#include <rmm/cuda_stream_pool.hpp>
-#include <rmm/cuda_stream_view.hpp>
 #include "memory/common.hpp"
 #include "memory/disk_access_limiter.hpp"
 #include "memory/fixed_size_host_memory_resource.hpp"
@@ -26,6 +24,8 @@
 #include "memory/reservation_aware_resource_adaptor.hpp"
 
 #include <rmm/cuda_device.hpp>
+#include <rmm/cuda_stream_pool.hpp>
+#include <rmm/cuda_stream_view.hpp>
 
 #include <mutex>
 #include <optional>

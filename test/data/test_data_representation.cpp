@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-#include <catch2/catch.hpp>
 #include "data/common.hpp"
 #include "data/cpu_data_representation.hpp"
 #include "data/gpu_data_representation.hpp"
@@ -36,6 +35,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <catch2/catch.hpp>
 
 // Declarations provided by utils/cudf_test_utils.hpp
 
@@ -299,7 +299,7 @@ TEST_CASE("gpu->host->gpu roundtrip preserves cudf table contents", "[gpu_data_r
   // Use one stream for both conversions to enforce order
   auto chain_stream = gpu_space->acquire_stream();
   auto cpu_any      = repr.convert_to_memory_space(host_space, chain_stream);
-  auto gpu_any = cpu_any->convert_to_memory_space(gpu_space, chain_stream);
+  auto gpu_any      = cpu_any->convert_to_memory_space(gpu_space, chain_stream);
 
   auto& back = gpu_any->cast<gpu_table_representation>();
   chain_stream.synchronize();
@@ -403,7 +403,7 @@ TEST_CASE("idata_representation const cast functionality",
 // Cross-Tier Comparison Tests
 // =============================================================================
 
-// Disabled: requires internal access to multiple_blocks_allocation constructor  
+// Disabled: requires internal access to multiple_blocks_allocation constructor
 TEST_CASE("Compare CPU and GPU representations",
           "[cpu_data_representation][gpu_data_representation][.disabled]")
 {
@@ -414,7 +414,7 @@ TEST_CASE("Multiple representations on same memory space",
           "[cpu_data_representation][gpu_data_representation]")
 {
   // Note: host_table_representation section disabled - requires internal API access
-  
+
   SECTION("Multiple GPU representations")
   {
     mock_memory_space gpu_space(memory::Tier::GPU, 0);
@@ -490,7 +490,8 @@ TEST_CASE("gpu_table_representation with multiple column types", "[gpu_data_repr
 }
 
 // Disabled: requires internal access to multiple_blocks_allocation constructor
-TEST_CASE("Representations polymorphism", "[cpu_data_representation][gpu_data_representation][.disabled]")
+TEST_CASE("Representations polymorphism",
+          "[cpu_data_representation][gpu_data_representation][.disabled]")
 {
   SUCCEED("Test disabled - requires internal API access");
 }
