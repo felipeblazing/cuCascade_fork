@@ -75,7 +75,7 @@ std::size_t fixed_size_host_memory_resource::get_total_reserved_bytes() const no
   std::lock_guard<std::mutex> lock(mutex_);
   std::size_t total = 0;
   for (const auto& [res, tracker] : active_reservations_) {
-    total += res->size();
+    total += static_cast<std::size_t>(std::max(int64_t{0}, res->size()));
   }
   return total;
 }
@@ -213,7 +213,7 @@ bool fixed_size_host_memory_resource::grow_reservation_by(reserved_arena& arena,
   std::lock_guard lock(mutex_);
   bytes = rmm::align_up(bytes, block_size_);
   if (do_reserve(bytes, memory_limit_)) {
-    arena.size_ += bytes;
+    arena.size_ += static_cast<int64_t>(bytes);
     return true;
   }
   return false;
@@ -227,10 +227,10 @@ void fixed_size_host_memory_resource::shrink_reservation_to_fit(reserved_arena& 
   auto iter = active_reservations_.find(h_reservation_slot);
   assert(iter != active_reservations_.end());
   auto& tracker = iter->second;
-  auto current  = static_cast<std::size_t>(std::max(int64_t{0}, tracker.allocated_bytes.load()));
+  auto current  = std::max(int64_t{0}, tracker.allocated_bytes.load());
   if (current < h_reservation_slot->size()) {
     auto old_res = std::exchange(h_reservation_slot->size_, current);
-    allocated_bytes_.sub(old_res - current);
+    allocated_bytes_.sub(static_cast<std::size_t>(old_res - current));
   }
 }
 
@@ -276,9 +276,10 @@ void fixed_size_host_memory_resource::release_reservation(chunked_reserved_area*
     throw std::runtime_error("reservation was not registered or already freed");
   }
 
-  auto current =
-    static_cast<std::size_t>(std::max(int64_t{0}, iter->second.allocated_bytes.load()));
-  std::size_t reclaimed_bytes = arena->size() > current ? arena->size() - current : 0;
+  auto current    = std::max(int64_t{0}, iter->second.allocated_bytes.load());
+  auto arena_size = arena->size();
+  auto reclaimed_bytes =
+    arena_size > current ? static_cast<std::size_t>(arena_size - current) : 0UL;
   allocated_bytes_.sub(reclaimed_bytes);
   active_reservations_.erase(iter);
 }

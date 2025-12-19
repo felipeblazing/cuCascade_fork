@@ -54,7 +54,10 @@ rmm::mr::device_memory_resource* reservation::get_memory_resource() const noexce
 
 const memory_space& reservation::get_memory_space() const noexcept { return *space_; }
 
-size_t reservation::size() const noexcept { return arena_->size(); }
+size_t reservation::size() const noexcept
+{
+  return static_cast<std::size_t>(std::max(int64_t{0}, arena_->size()));
+}
 
 [[nodiscard]] Tier reservation::tier() const noexcept { return space_->get_tier(); }
 
@@ -89,7 +92,8 @@ void fail_reservation_limit_policy::handle_over_reservation(
   std::size_t current_allocated,
   reserved_arena* reserved_bytes)
 {
-  std::size_t reservation_size = reserved_bytes ? reserved_bytes->size() : 0;
+  auto reservation_size =
+    reserved_bytes ? static_cast<std::size_t>(std::max(int64_t{0}, reserved_bytes->size())) : 0UL;
   RMM_FAIL("Allocation of " + std::to_string(requested_bytes) +
              " bytes would exceed stream reservation of " + std::to_string(reservation_size) +
              " bytes (current: " + std::to_string(current_allocated) + " bytes)",
@@ -115,7 +119,8 @@ void increase_reservation_limit_policy::handle_over_reservation(
   if (!reserved_bytes) { RMM_FAIL("No reservation set for stream", rmm::out_of_memory); }
 
   std::size_t post_allocation_size = current_allocated + requested_bytes;
-  std::size_t extra_space_needed   = post_allocation_size - reserved_bytes->size();
+  auto current_reserved = static_cast<std::size_t>(std::max(int64_t{0}, reserved_bytes->size()));
+  std::size_t extra_space_needed = post_allocation_size - current_reserved;
 
   // Add padding to avoid frequent increases
   std::size_t padded_reservation =

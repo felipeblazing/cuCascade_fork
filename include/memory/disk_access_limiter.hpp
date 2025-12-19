@@ -39,7 +39,7 @@ class disk_access_limiter {
                                  std::size_t bytes,
                                  std::string_view base_fname,
                                  std::unique_ptr<event_notifier> notifier)
-      : reserved_arena(bytes, std::move(notifier)),
+      : reserved_arena(static_cast<int64_t>(bytes), std::move(notifier)),
         base_name_(base_fname.data(), base_fname.size()),
         mr_(&mr)
     {

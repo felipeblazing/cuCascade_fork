@@ -60,7 +60,7 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
     explicit device_reserved_arena(reservation_aware_resource_adaptor& mr,
                                    std::size_t bytes,
                                    std::unique_ptr<event_notifier> notifier)
-      : reserved_arena(bytes, std::move(notifier)), mr_(&mr)
+      : reserved_arena(static_cast<int64_t>(bytes), std::move(notifier)), mr_(&mr)
     {
     }
 
@@ -75,9 +75,9 @@ class reservation_aware_resource_adaptor : public rmm::mr::device_memory_resourc
 
     [[nodiscard]] std::size_t get_available_memory() const noexcept
     {
-      auto current = static_cast<std::size_t>(allocated_bytes.value());
+      auto current = allocated_bytes.value();
       auto sz      = this->size();
-      return current < sz ? sz - current : 0UL;
+      return current < sz ? static_cast<std::size_t>(sz - current) : 0UL;
     }
 
     atomic_bounded_counter<std::int64_t> allocated_bytes{0LL};

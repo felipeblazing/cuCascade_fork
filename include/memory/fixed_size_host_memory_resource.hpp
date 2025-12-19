@@ -72,7 +72,9 @@ class fixed_size_host_memory_resource : public rmm::mr::device_memory_resource {
     explicit chunked_reserved_area(fixed_size_host_memory_resource& mr,
                                    std::size_t bytes,
                                    std::unique_ptr<event_notifier> notify_on_exit)
-      : reserved_arena(bytes, std::move(notify_on_exit)), mr_(&mr), uuid_(create_uid())
+      : reserved_arena(static_cast<int64_t>(bytes), std::move(notify_on_exit)),
+        mr_(&mr),
+        uuid_(create_uid())
     {
     }
 

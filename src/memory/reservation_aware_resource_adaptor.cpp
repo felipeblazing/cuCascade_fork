@@ -351,7 +351,7 @@ bool reservation_aware_resource_adaptor::grow_reservation_by(device_reserved_are
                                                              std::size_t bytes)
 {
   if (do_reserve(bytes, _memory_limit)) {
-    arena.size_ += bytes;
+    arena.size_ += static_cast<int64_t>(bytes);
     return true;
   }
   return false;
@@ -359,10 +359,10 @@ bool reservation_aware_resource_adaptor::grow_reservation_by(device_reserved_are
 
 void reservation_aware_resource_adaptor::shrink_reservation_to_fit(device_reserved_arena& arena)
 {
-  auto current_bytes = static_cast<std::size_t>(std::max(int64_t{0}, arena.allocated_bytes.load()));
+  auto current_bytes = std::max(int64_t{0}, arena.allocated_bytes.load());
   if (current_bytes < arena.size()) {
     auto reclaimed_bytes = std::exchange(arena.size_, current_bytes) - current_bytes;
-    _total_allocated_bytes.sub(reclaimed_bytes);
+    _total_allocated_bytes.sub(static_cast<std::size_t>(reclaimed_bytes));
   }
 }
 
@@ -509,14 +509,14 @@ void reservation_aware_resource_adaptor::do_release_reservation(
   if (!arena) return;
 
   int64_t allocation_size    = arena->allocated_bytes.load();
+  int64_t arena_size         = arena->size();
   std::size_t released_bytes = 0;
-  if (static_cast<int64_t>(arena->size()) > allocation_size) {
-    released_bytes =
-      arena->size() - static_cast<std::size_t>(std::max(int64_t{0}, allocation_size));
+  if (arena_size > allocation_size) {
+    released_bytes = static_cast<std::size_t>(arena_size - std::max(int64_t{0}, allocation_size));
   }
 
   _number_of_allocations.fetch_sub(1);
-  _total_reserved_bytes.fetch_sub(arena->size());
+  _total_reserved_bytes.fetch_sub(static_cast<std::size_t>(std::max(int64_t{0}, arena_size)));
   _total_allocated_bytes.sub(released_bytes);
 }
 
