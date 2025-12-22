@@ -15,9 +15,8 @@
  * limitations under the License.
  */
 
-#include "data/common.hpp"
 #include "data/data_batch.hpp"
-#include "memory/null_device_memory_resource.hpp"
+#include "utils/mock_test_utils.hpp"
 
 #include <catch2/catch.hpp>
 
@@ -28,51 +27,7 @@
 #include <vector>
 
 using namespace cucascade;
-
-// Mock memory_space for testing - provides a simple memory_space without real allocators
-class mock_memory_space : public memory::memory_space {
- public:
-  mock_memory_space(memory::Tier tier, size_t device_id = 0)
-    : memory::memory_space(tier,
-                           static_cast<int>(device_id),
-                           1024 * 1024 * 1024,                      // memory_limit
-                           (1024ULL * 1024ULL * 1024ULL) * 8 / 10,  // start_downgrading_threshold
-                           (1024ULL * 1024ULL * 1024ULL) / 2,       // stop_downgrading_threshold
-                           1024 * 1024 * 1024,                      // capacity
-                           std::make_unique<memory::null_device_memory_resource>())
-  {
-  }
-};
-
-// Helper base class to hold memory_space - initialized before idata_representation
-struct mock_memory_space_holder {
-  std::shared_ptr<mock_memory_space> space;
-
-  mock_memory_space_holder(memory::Tier tier, size_t device_id)
-    : space(std::make_shared<mock_memory_space>(tier, device_id))
-  {
-  }
-};
-
-// Mock idata_representation for testing
-// Inherits from mock_memory_space_holder first to ensure it's constructed before
-// idata_representation
-class mock_data_representation : private mock_memory_space_holder, public idata_representation {
- public:
-  explicit mock_data_representation(memory::Tier tier, size_t size = 1024, size_t device_id = 0)
-    : mock_memory_space_holder(tier, device_id)  // Construct holder first
-      ,
-      idata_representation(*space)  // Pass reference to base class
-      ,
-      _size(size)
-  {
-  }
-
-  std::size_t get_size_in_bytes() const override { return _size; }
-
- private:
-  size_t _size;
-};
+using cucascade::test::mock_data_representation;
 
 // Test basic construction
 TEST_CASE("data_batch Construction", "[data_batch]")

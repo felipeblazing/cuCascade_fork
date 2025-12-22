@@ -15,24 +15,14 @@
  * limitations under the License.
  */
 
-#include "data/common.hpp"
 #include "data/cpu_data_representation.hpp"
 #include "data/gpu_data_representation.hpp"
 #include "data/representation_converter.hpp"
-#include "memory/common.hpp"
-#include "memory/fixed_size_host_memory_resource.hpp"
-#include "memory/memory_reservation_manager.hpp"
-#include "memory/null_device_memory_resource.hpp"
 #include "utils/cudf_test_utils.hpp"
-
-#include <cudf/column/column_factories.hpp>
-#include <cudf/table/table.hpp>
-#include <cudf/types.hpp>
+#include "utils/mock_test_utils.hpp"
 
 #include <rmm/cuda_stream.hpp>
 #include <rmm/cuda_stream_view.hpp>
-
-#include <cuda_runtime_api.h>
 
 #include <catch2/catch.hpp>
 
@@ -40,25 +30,13 @@
 #include <vector>
 
 using namespace cucascade;
+using cucascade::test::create_simple_cudf_table;
+using cucascade::test::initialize_memory_for_conversions;
+using cucascade::test::mock_memory_space;
 
 // =============================================================================
 // Test Fixtures and Helpers
 // =============================================================================
-
-// Mock memory_space for testing - provides a simple memory_space without real allocators
-class mock_memory_space : public memory::memory_space {
- public:
-  mock_memory_space(memory::Tier tier, size_t device_id = 0)
-    : memory::memory_space(tier,
-                           static_cast<int>(device_id),
-                           1024 * 1024 * 1024,                      // memory_limit
-                           (1024ULL * 1024ULL * 1024ULL) * 8 / 10,  // start_downgrading_threshold
-                           (1024ULL * 1024ULL * 1024ULL) / 2,       // stop_downgrading_threshold
-                           1024 * 1024 * 1024,                      // capacity
-                           std::make_unique<memory::null_device_memory_resource>())
-  {
-  }
-};
 
 // Custom test representation for testing custom converter registration
 class custom_test_representation : public idata_representation {
@@ -91,36 +69,6 @@ class another_test_representation : public idata_representation {
  private:
   double _value;
 };
-
-// Helper to create a simple cuDF table
-static cudf::table create_simple_cudf_table(int num_rows = 100)
-{
-  std::vector<std::unique_ptr<cudf::column>> columns;
-
-  auto col = cudf::make_numeric_column(
-    cudf::data_type{cudf::type_id::INT32}, num_rows, cudf::mask_state::UNALLOCATED);
-  if (num_rows > 0) {
-    auto view  = col->mutable_view();
-    auto bytes = static_cast<size_t>(num_rows) * sizeof(int32_t);
-    cudaMemset(const_cast<void*>(view.head()), 0x42, bytes);
-  }
-  columns.push_back(std::move(col));
-
-  return cudf::table(std::move(columns));
-}
-
-// Helper to initialize memory for conversion tests
-static void initialize_memory_for_conversions()
-{
-  using namespace cucascade::memory;
-  memory_reservation_manager::reset_for_testing();
-  std::vector<memory_reservation_manager::memory_space_config> configs;
-  configs.emplace_back(
-    Tier::GPU, 0, 2048ull * 1024 * 1024, make_default_allocator_for_tier(Tier::GPU));
-  configs.emplace_back(
-    Tier::HOST, 0, 4096ull * 1024 * 1024, make_default_allocator_for_tier(Tier::HOST));
-  memory_reservation_manager::initialize(std::move(configs));
-}
 
 // RAII guard to unregister custom test converters after each test
 // Note: We don't use clear() because it would remove builtin converters and
