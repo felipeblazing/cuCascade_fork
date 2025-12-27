@@ -21,16 +21,16 @@
 #include <memory>
 #include <mutex>
 #include <utility>
+
 namespace cucascade {
 namespace memory {
 
 struct notification_channel : std::enable_shared_from_this<notification_channel> {
   struct event_notifier {
-    explicit event_notifier(notification_channel& channel) : _channel(channel.shared_from_this()) {}
+    explicit event_notifier(notification_channel& channel);
+    ~event_notifier();
 
-    ~event_notifier() { _channel->release_notifier(); }
-
-    void post() { _channel->notify(); }
+    void post();
 
    private:
     std::shared_ptr<notification_channel> _channel;
@@ -38,44 +38,18 @@ struct notification_channel : std::enable_shared_from_this<notification_channel>
 
   enum class wait_status { IDLE, NOTIFIED, SHUTDOWN };
 
-  ~notification_channel() { shutdown(); }
+  ~notification_channel();
 
-  wait_status wait()
-  {
-    std::unique_lock lock(_mutex);
-    bool notified = false;
-    _cv.wait(lock, [&, self = shared_from_this()] {
-      notified = std::exchange(_has_been_notified, false);
-      return notified || (_n_active_notifiers == 0) || not _is_running;
-    });
-    return !_is_running ? wait_status::SHUTDOWN
-           : (notified) ? wait_status::NOTIFIED
-                        : wait_status::IDLE;
-  }
+  wait_status wait();
 
-  std::unique_ptr<event_notifier> get_notifier() { return std::make_unique<event_notifier>(*this); }
+  std::unique_ptr<event_notifier> get_notifier();
 
-  void shutdown()
-  {
-    std::lock_guard lock(_mutex);
-    _is_running = false;
-    _cv.notify_one();
-  }
+  void shutdown();
 
  private:
-  void notify()
-  {
-    std::lock_guard lock(_mutex);
-    _has_been_notified = true;
-    _cv.notify_one();
-  }
+  void notify();
 
-  void release_notifier()
-  {
-    std::lock_guard lock(_mutex);
-    _n_active_notifiers--;
-    if (_n_active_notifiers == 0) { _cv.notify_all(); }
-  }
+  void release_notifier();
 
   mutable std::mutex _mutex;
   std::condition_variable _cv;
@@ -87,17 +61,8 @@ struct notification_channel : std::enable_shared_from_this<notification_channel>
 using event_notifier = notification_channel::event_notifier;
 
 struct notify_on_exit {
-  explicit notify_on_exit(std::unique_ptr<event_notifier> notifier) : _notifier(std::move(notifier))
-  {
-  }
-
-  ~notify_on_exit() noexcept
-  {
-    try {
-      if (_notifier) _notifier->post();
-    } catch (...) {
-    }
-  }
+  explicit notify_on_exit(std::unique_ptr<event_notifier> notifier);
+  ~notify_on_exit() noexcept;
 
  private:
   std::unique_ptr<event_notifier> _notifier;

@@ -17,19 +17,11 @@
 
 #pragma once
 
-#include <rmm/aligned.hpp>
-#include <rmm/detail/aligned.hpp>
-#include <rmm/detail/nvtx/ranges.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
 
 #include <cuda/stream_ref>
-#include <cuda_runtime_api.h>
-
-#include <numa.h>
 
 #include <cstddef>
-#include <cstdlib>
-#include <cstring>
 
 namespace cucascade {
 namespace memory {
@@ -61,23 +53,7 @@ class numa_region_pinned_host_memory_resource final : public rmm::mr::device_mem
    *
    * @return Pointer to the newly allocated memory.
    */
-  void* do_allocate(std::size_t bytes, [[maybe_unused]] rmm::cuda_stream_view stream) override
-  {
-    RMM_FUNC_RANGE();
-    // don't allocate anything if the user requested zero bytes
-    if (0 == bytes) { return nullptr; }
-
-    if (_numa_node == -1) {
-      void* ptr{nullptr};
-      RMM_CUDA_TRY_ALLOC(cudaHostAlloc(&ptr, bytes, cudaHostAllocDefault), bytes);
-      return ptr;
-    } else {
-      void* ptr = numa_alloc_onnode(bytes, _numa_node);
-      if (ptr == nullptr) { throw rmm::bad_alloc(std::strerror(errno)); }
-      RMM_CUDA_TRY_ALLOC(cudaHostRegister(ptr, bytes, cudaHostRegisterMapped), bytes);
-      return ptr;
-    }
-  }
+  void* do_allocate(std::size_t bytes, rmm::cuda_stream_view stream) override;
 
   /**
    * @brief Deallocate memory pointed to by \p ptr.
@@ -89,18 +65,7 @@ class numa_region_pinned_host_memory_resource final : public rmm::mr::device_mem
    * value of `bytes` that was passed to the `allocate` call that returned `ptr`.
    * @param stream This argument is ignored.
    */
-  void do_deallocate(void* ptr,
-                     std::size_t bytes,
-                     [[maybe_unused]] rmm::cuda_stream_view stream) noexcept override
-  {
-    RMM_FUNC_RANGE();
-    if (_numa_node == -1) {
-      RMM_ASSERT_CUDA_SUCCESS(cudaFreeHost(ptr));
-    } else {
-      cudaHostUnregister(ptr);
-      numa_free(ptr, bytes);
-    }
-  }
+  void do_deallocate(void* ptr, std::size_t bytes, rmm::cuda_stream_view stream) noexcept override;
 
   /**
    * @brief Compare this resource to another.
@@ -113,11 +78,7 @@ class numa_region_pinned_host_memory_resource final : public rmm::mr::device_mem
    * @return false If the two resources are not equal
    */
   [[nodiscard]] bool do_is_equal(
-    const rmm::mr::device_memory_resource& other) const noexcept override
-  {
-    auto* mr_ptr = dynamic_cast<numa_region_pinned_host_memory_resource const*>(&other);
-    return mr_ptr == this && mr_ptr->_numa_node == this->_numa_node;
-  }
+    const rmm::mr::device_memory_resource& other) const noexcept override;
 
   /**
    * @brief Enables the `cuda::mr::device_accessible` property
