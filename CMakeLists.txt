@@ -55,9 +55,6 @@ find_package(rmm REQUIRED CONFIG)
 # Find cudf for data representation support
 find_package(cudf REQUIRED CONFIG)
 
-# Find fmt for string formatting
-find_package(fmt REQUIRED CONFIG)
-
 # Set CUDA architectures
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 75 80 86 90)
@@ -116,15 +113,8 @@ target_include_directories(
          $<INSTALL_INTERFACE:include>)
 
 # Link dependencies to object library
-target_link_libraries(
-  cucascade_objects
-  PUBLIC rmm::rmm
-         cudf::cudf
-         CUDA::cudart
-         CUDA::nvml
-         Threads::Threads
-         fmt::fmt
-         numa)
+target_link_libraries(cucascade_objects PUBLIC rmm::rmm cudf::cudf CUDA::cudart
+                                               CUDA::nvml Threads::Threads numa)
 
 # Position independent code (required for shared library)
 set_target_properties(cucascade_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -142,14 +132,8 @@ if(BUILD_STATIC_LIBS)
            $<INSTALL_INTERFACE:include>)
 
   target_link_libraries(
-    cucascade_static
-    PUBLIC rmm::rmm
-           cudf::cudf
-           CUDA::cudart
-           CUDA::nvml
-           Threads::Threads
-           fmt::fmt
-           numa)
+    cucascade_static PUBLIC rmm::rmm cudf::cudf CUDA::cudart CUDA::nvml
+                            Threads::Threads numa)
 
   set_target_properties(
     cucascade_static PROPERTIES OUTPUT_NAME cucascade EXPORT_NAME
@@ -169,14 +153,8 @@ if(BUILD_SHARED_LIBS)
            $<INSTALL_INTERFACE:include>)
 
   target_link_libraries(
-    cucascade_shared
-    PUBLIC rmm::rmm
-           cudf::cudf
-           CUDA::cudart
-           CUDA::nvml
-           Threads::Threads
-           fmt::fmt
-           numa)
+    cucascade_shared PUBLIC rmm::rmm cudf::cudf CUDA::cudart CUDA::nvml
+                            Threads::Threads numa)
 
   set_target_properties(
     cucascade_shared
