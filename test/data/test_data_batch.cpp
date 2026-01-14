@@ -38,7 +38,7 @@ TEST_CASE("data_batch Construction", "[data_batch]")
   REQUIRE(batch.get_batch_id() == 1);
   REQUIRE(batch.get_current_tier() == memory::Tier::GPU);
   REQUIRE(batch.get_processing_count() == 0);
-  REQUIRE(batch.get_state() == batch_state::at_rest);
+  REQUIRE(batch.get_state() == batch_state::idle);
 }
 
 // Test move constructor
@@ -98,18 +98,29 @@ TEST_CASE("data_batch Processing State Management", "[data_batch]")
   data_batch batch(1, std::move(data));
 
   REQUIRE(batch.get_processing_count() == 0);
-  REQUIRE(batch.get_state() == batch_state::at_rest);
+  REQUIRE(batch.get_state() == batch_state::idle);
 
-  // Lock for processing
+  // Cannot lock for processing directly from idle - must create task first
+  REQUIRE(batch.try_to_lock_for_processing() == false);
+  REQUIRE(batch.get_processing_count() == 0);
+  REQUIRE(batch.get_state() == batch_state::idle);
+
+  // Create task first
+  REQUIRE(batch.try_to_create_task() == true);
+  REQUIRE(batch.get_state() == batch_state::task_created);
+
+  // Now lock for processing
   REQUIRE(batch.try_to_lock_for_processing() == true);
   REQUIRE(batch.get_processing_count() == 1);
   REQUIRE(batch.get_state() == batch_state::processing);
 
   // Lock again while already processing
+  REQUIRE(batch.try_to_create_task() == true);
   REQUIRE(batch.try_to_lock_for_processing() == true);
   REQUIRE(batch.get_processing_count() == 2);
   REQUIRE(batch.get_state() == batch_state::processing);
 
+  REQUIRE(batch.try_to_create_task() == true);
   REQUIRE(batch.try_to_lock_for_processing() == true);
   REQUIRE(batch.get_processing_count() == 3);
 }
@@ -121,10 +132,11 @@ TEST_CASE("data_batch_processing_handle RAII", "[data_batch]")
   data_batch batch(1, std::move(data));
 
   REQUIRE(batch.get_processing_count() == 0);
-  REQUIRE(batch.get_state() == batch_state::at_rest);
+  REQUIRE(batch.get_state() == batch_state::idle);
 
   {
-    // Create a processing handle
+    // Create task first, then lock for processing
+    REQUIRE(batch.try_to_create_task() == true);
     REQUIRE(batch.try_to_lock_for_processing() == true);
     data_batch_processing_handle handle(&batch);
 
@@ -132,7 +144,8 @@ TEST_CASE("data_batch_processing_handle RAII", "[data_batch]")
     REQUIRE(batch.get_state() == batch_state::processing);
 
     {
-      // Create another handle
+      // Create another handle (can lock while already processing)
+      REQUIRE(batch.try_to_create_task() == true);
       REQUIRE(batch.try_to_lock_for_processing() == true);
       data_batch_processing_handle handle2(&batch);
 
@@ -144,40 +157,49 @@ TEST_CASE("data_batch_processing_handle RAII", "[data_batch]")
   }  // handle goes out of scope
 
   REQUIRE(batch.get_processing_count() == 0);
-  REQUIRE(batch.get_state() == batch_state::at_rest);
+  REQUIRE(batch.get_state() == batch_state::idle);
 }
 
-// Test try_to_lock_for_downgrade blocks processing
-TEST_CASE("data_batch Downgrade Blocks Processing", "[data_batch]")
+// Test try_to_lock_for_in_transit blocks processing
+TEST_CASE("data_batch In Transit Blocks Processing", "[data_batch]")
 {
   auto data = std::make_unique<mock_data_representation>(memory::Tier::GPU, 1024);
   data_batch batch(1, std::move(data));
 
-  REQUIRE(batch.get_state() == batch_state::at_rest);
+  REQUIRE(batch.get_state() == batch_state::idle);
 
-  // Lock for downgrade
-  REQUIRE(batch.try_to_lock_for_downgrade() == true);
-  REQUIRE(batch.get_state() == batch_state::downgrading);
+  // Lock for in_transit
+  REQUIRE(batch.try_to_lock_for_in_transit() == true);
+  REQUIRE(batch.get_state() == batch_state::in_transit);
 
-  // Try to lock for processing should fail while downgrading
+  // Try to create task should fail while in_transit
+  REQUIRE(batch.try_to_create_task() == false);
+  REQUIRE(batch.get_state() == batch_state::in_transit);
+
+  // Try to lock for processing should fail while in_transit
   REQUIRE(batch.try_to_lock_for_processing() == false);
   REQUIRE(batch.get_processing_count() == 0);
+
+  // Release the in_transit lock
+  REQUIRE(batch.try_to_release_in_transit() == true);
+  REQUIRE(batch.get_state() == batch_state::idle);
 }
 
-// Test try_to_lock_for_downgrade fails when processing
-TEST_CASE("data_batch Cannot Downgrade While Processing", "[data_batch]")
+// Test try_to_lock_for_in_transit fails when processing
+TEST_CASE("data_batch Cannot Go In Transit While Processing", "[data_batch]")
 {
   auto data = std::make_unique<mock_data_representation>(memory::Tier::GPU, 1024);
   data_batch batch(1, std::move(data));
 
-  // Start processing
+  // Create task and start processing
+  REQUIRE(batch.try_to_create_task() == true);
   REQUIRE(batch.try_to_lock_for_processing() == true);
   data_batch_processing_handle handle(&batch);
 
   REQUIRE(batch.get_state() == batch_state::processing);
 
-  // Try to lock for downgrade should fail
-  REQUIRE(batch.try_to_lock_for_downgrade() == false);
+  // Try to lock for in_transit should fail
+  REQUIRE(batch.try_to_lock_for_in_transit() == false);
   REQUIRE(batch.get_state() == batch_state::processing);
 }
 
@@ -196,7 +218,7 @@ TEST_CASE("Multiple data_batch Instances", "[data_batch]")
     REQUIRE(batches[i].get_batch_id() == i);
     REQUIRE(batches[i].get_current_tier() == memory::Tier::GPU);
     REQUIRE(batches[i].get_processing_count() == 0);
-    REQUIRE(batches[i].get_state() == batch_state::at_rest);
+    REQUIRE(batches[i].get_state() == batch_state::idle);
   }
 }
 
@@ -241,6 +263,8 @@ TEST_CASE("data_batch Thread-Safe Processing Count", "[data_batch]")
   for (int i = 0; i < num_threads; ++i) {
     threads.emplace_back([&batch, &thread_handles, i]() {
       for (int j = 0; j < locks_per_thread; ++j) {
+        // Create task first so threads can lock for processing
+        REQUIRE(batch.try_to_create_task() == true);
         if (batch.try_to_lock_for_processing()) { thread_handles[i].emplace_back(&batch); }
       }
     });
@@ -261,7 +285,7 @@ TEST_CASE("data_batch Thread-Safe Processing Count", "[data_batch]")
 
   // Verify final count is back to zero
   REQUIRE(batch.get_processing_count() == 0);
-  REQUIRE(batch.get_state() == batch_state::at_rest);
+  REQUIRE(batch.get_state() == batch_state::idle);
 }
 
 // Test batch ID uniqueness in practice
@@ -290,9 +314,10 @@ TEST_CASE("data_batch Zero Processing Count", "[data_batch]")
 
   // Starting processing count should be zero
   REQUIRE(batch.get_processing_count() == 0);
-  REQUIRE(batch.get_state() == batch_state::at_rest);
+  REQUIRE(batch.get_state() == batch_state::idle);
 
-  // Lock for processing from at_rest
+  // Create task and lock for processing
+  REQUIRE(batch.try_to_create_task() == true);
   REQUIRE(batch.try_to_lock_for_processing() == true);
   {
     data_batch_processing_handle handle(&batch);
@@ -300,11 +325,12 @@ TEST_CASE("data_batch Zero Processing Count", "[data_batch]")
     REQUIRE(batch.get_state() == batch_state::processing);
   }  // Handle goes out of scope
 
-  // Should be back to at_rest
+  // Should be back to idle
   REQUIRE(batch.get_processing_count() == 0);
-  REQUIRE(batch.get_state() == batch_state::at_rest);
+  REQUIRE(batch.get_state() == batch_state::idle);
 
-  // Can lock again from at_rest
+  // Can create task and lock again from idle
+  REQUIRE(batch.try_to_create_task() == true);
   REQUIRE(batch.try_to_lock_for_processing() == true);
   REQUIRE(batch.get_processing_count() == 1);
 }
@@ -332,6 +358,7 @@ TEST_CASE("data_batch Move Requires Zero Processing Count", "[data_batch]")
   {
     auto data = std::make_unique<mock_data_representation>(memory::Tier::GPU, 1024);
     data_batch batch1(1, std::move(data));
+    batch1.try_to_create_task();
     batch1.try_to_lock_for_processing();
     data_batch_processing_handle handle(&batch1);
 
@@ -360,8 +387,11 @@ TEST_CASE("data_batch Rapid Processing Cycles", "[data_batch]")
 
   // Perform many cycles of lock and unlock via handles
   for (int cycle = 0; cycle < 100; ++cycle) {
+    // Create task first
+
     std::vector<data_batch_processing_handle> handles;
     for (int i = 0; i < 10; ++i) {
+      REQUIRE(batch.try_to_create_task() == true);
       REQUIRE(batch.try_to_lock_for_processing() == true);
       handles.emplace_back(&batch);
     }
@@ -371,12 +401,12 @@ TEST_CASE("data_batch Rapid Processing Cycles", "[data_batch]")
     handles.clear();  // Release all handles
 
     REQUIRE(batch.get_processing_count() == 0);
-    REQUIRE(batch.get_state() == batch_state::at_rest);
+    REQUIRE(batch.get_state() == batch_state::idle);
   }
 
-  // Final state should be at_rest with zero count
+  // Final state should be idle with zero count
   REQUIRE(batch.get_processing_count() == 0);
-  REQUIRE(batch.get_state() == batch_state::at_rest);
+  REQUIRE(batch.get_state() == batch_state::idle);
 }
 
 // Test smart pointer lifecycle management
@@ -395,6 +425,7 @@ TEST_CASE("data_batch Smart Pointer Lifecycle", "[data_batch]")
     REQUIRE(batch_copy->get_batch_id() == 1);
 
     // Both point to the same batch
+    batch->try_to_create_task();
     batch->try_to_lock_for_processing();
     {
       data_batch_processing_handle handle(batch.get());
@@ -425,6 +456,7 @@ TEST_CASE("data_batch_processing_handle Move Semantics", "[data_batch]")
   auto data = std::make_unique<mock_data_representation>(memory::Tier::GPU, 1024);
   data_batch batch(1, std::move(data));
 
+  REQUIRE(batch.try_to_create_task() == true);
   REQUIRE(batch.try_to_lock_for_processing() == true);
   REQUIRE(batch.get_processing_count() == 1);
 
@@ -441,7 +473,7 @@ TEST_CASE("data_batch_processing_handle Move Semantics", "[data_batch]")
   }  // handle2 goes out of scope, should decrement
 
   REQUIRE(batch.get_processing_count() == 0);
-  REQUIRE(batch.get_state() == batch_state::at_rest);
+  REQUIRE(batch.get_state() == batch_state::idle);
 }
 
 // Test data_batch_processing_handle explicit release
@@ -450,6 +482,7 @@ TEST_CASE("data_batch_processing_handle Explicit Release", "[data_batch]")
   auto data = std::make_unique<mock_data_representation>(memory::Tier::GPU, 1024);
   data_batch batch(1, std::move(data));
 
+  REQUIRE(batch.try_to_create_task() == true);
   REQUIRE(batch.try_to_lock_for_processing() == true);
   data_batch_processing_handle handle(&batch);
 
@@ -477,4 +510,75 @@ TEST_CASE("data_batch_processing_handle Empty Handle", "[data_batch]")
   // Release on empty handle should be safe
   handle.release();
   REQUIRE(handle.valid() == false);
+}
+
+// Test task_created state transitions
+TEST_CASE("data_batch Task Created State Transitions", "[data_batch]")
+{
+  auto data = std::make_unique<mock_data_representation>(memory::Tier::GPU, 1024);
+  data_batch batch(1, std::move(data));
+
+  REQUIRE(batch.get_state() == batch_state::idle);
+
+  // Create task
+  REQUIRE(batch.try_to_create_task() == true);
+  REQUIRE(batch.get_state() == batch_state::task_created);
+
+  // Can call try_to_create_task again while already in task_created state (idempotent)
+  REQUIRE(batch.try_to_create_task() == true);
+  REQUIRE(batch.get_state() == batch_state::task_created);
+
+  // Cannot lock for in_transit while in task_created state
+  REQUIRE(batch.try_to_lock_for_in_transit() == false);
+  REQUIRE(batch.get_state() == batch_state::task_created);
+
+  // Can cancel task and go back to idle
+  REQUIRE(batch.try_to_cancel_task() == true);
+  REQUIRE(batch.try_to_cancel_task() == true);
+  REQUIRE(batch.get_state() == batch_state::idle);
+
+  // Create task again
+  REQUIRE(batch.try_to_create_task() == true);
+  REQUIRE(batch.get_state() == batch_state::task_created);
+
+  // Go to processing
+  REQUIRE(batch.try_to_lock_for_processing() == true);
+  data_batch_processing_handle handle(&batch);
+  REQUIRE(batch.get_state() == batch_state::processing);
+
+  // Can call try_to_create_task while processing (idempotent)
+  REQUIRE(batch.try_to_create_task() == true);
+  REQUIRE(batch.get_state() == batch_state::processing);
+}
+
+// Test in_transit state transitions
+TEST_CASE("data_batch In Transit State Transitions", "[data_batch]")
+{
+  auto data = std::make_unique<mock_data_representation>(memory::Tier::GPU, 1024);
+  data_batch batch(1, std::move(data));
+
+  REQUIRE(batch.get_state() == batch_state::idle);
+
+  // Lock for in_transit
+  REQUIRE(batch.try_to_lock_for_in_transit() == true);
+  REQUIRE(batch.get_state() == batch_state::in_transit);
+
+  // Cannot lock for in_transit again
+  REQUIRE(batch.try_to_lock_for_in_transit() == false);
+  REQUIRE(batch.get_state() == batch_state::in_transit);
+
+  // Cannot create task while in_transit
+  REQUIRE(batch.try_to_create_task() == false);
+  REQUIRE(batch.get_state() == batch_state::in_transit);
+
+  // Cannot cancel task (not in task_created state)
+  REQUIRE(batch.try_to_cancel_task() == false);
+
+  // Release in_transit lock
+  REQUIRE(batch.try_to_release_in_transit() == true);
+  REQUIRE(batch.get_state() == batch_state::idle);
+
+  // Cannot release in_transit again (already idle)
+  REQUIRE(batch.try_to_release_in_transit() == false);
+  REQUIRE(batch.get_state() == batch_state::idle);
 }
