@@ -1,3 +1,10 @@
+/**
+ * @brief Result of attempting to lock a batch for processing.
+ */
+struct lock_for_processing_result {
+  bool success{false};
+  data_batch_processing_handle handle{};
+};
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
@@ -285,16 +292,16 @@ class data_batch {
   /**
    * @brief Attempt to lock this batch for processing operations.
    *
-   * Returns true if the batch is in task_created state or already processing.
+   * Returns a processing handle if the batch is in task_created state or already processing.
    * If successful, decrements task_created_counter, increments processing count,
    * and transitions to processing state (if not already processing).
    *
-   * @return true if the batch was successfully locked for processing
-   * @return false if the batch is not in task_created or processing state
+   * @return lock_for_processing_result success=true with handle on success; success=false if
+   *         batch is not in a lockable state.
    * @throws std::runtime_error if task_created_count is zero (try_to_create_task() must be
-   *         called before this method)
+   *         called before this method) while in a lockable state.
    */
-  bool try_to_lock_for_processing();
+  lock_for_processing_result try_to_lock_for_processing();
 
   /**
    * @brief Attempt to lock this batch for in-transit operations (e.g., downgrade).

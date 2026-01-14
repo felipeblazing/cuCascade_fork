@@ -101,7 +101,8 @@ TEST_CASE("data_batch Processing State Management", "[data_batch]")
   REQUIRE(batch.get_state() == batch_state::idle);
 
   // Cannot lock for processing directly from idle - must create task first
-  REQUIRE(batch.try_to_lock_for_processing() == false);
+  auto bad_idle = batch.try_to_lock_for_processing();
+  REQUIRE(bad_idle.success == false);
   REQUIRE(batch.get_processing_count() == 0);
   REQUIRE(batch.get_state() == batch_state::idle);
 
@@ -110,18 +111,27 @@ TEST_CASE("data_batch Processing State Management", "[data_batch]")
   REQUIRE(batch.get_state() == batch_state::task_created);
 
   // Now lock for processing
-  REQUIRE(batch.try_to_lock_for_processing() == true);
+  auto r1 = batch.try_to_lock_for_processing();
+  REQUIRE(r1.success == true);
+  auto h1 = std::move(r1.handle);
+  REQUIRE(h1.valid() == true);
   REQUIRE(batch.get_processing_count() == 1);
   REQUIRE(batch.get_state() == batch_state::processing);
 
   // Lock again while already processing
   REQUIRE(batch.try_to_create_task() == true);
-  REQUIRE(batch.try_to_lock_for_processing() == true);
+  auto r2 = batch.try_to_lock_for_processing();
+  REQUIRE(r2.success == true);
+  auto h2 = std::move(r2.handle);
+  REQUIRE(h2.valid() == true);
   REQUIRE(batch.get_processing_count() == 2);
   REQUIRE(batch.get_state() == batch_state::processing);
 
   REQUIRE(batch.try_to_create_task() == true);
-  REQUIRE(batch.try_to_lock_for_processing() == true);
+  auto r3 = batch.try_to_lock_for_processing();
+  REQUIRE(r3.success == true);
+  auto h3 = std::move(r3.handle);
+  REQUIRE(h3.valid() == true);
   REQUIRE(batch.get_processing_count() == 3);
 }
 
@@ -137,8 +147,9 @@ TEST_CASE("data_batch_processing_handle RAII", "[data_batch]")
   {
     // Create task first, then lock for processing
     REQUIRE(batch.try_to_create_task() == true);
-    REQUIRE(batch.try_to_lock_for_processing() == true);
-    data_batch_processing_handle handle(&batch);
+    auto r = batch.try_to_lock_for_processing();
+    REQUIRE(r.success == true);
+    auto handle = std::move(r.handle);
 
     REQUIRE(batch.get_processing_count() == 1);
     REQUIRE(batch.get_state() == batch_state::processing);
@@ -146,8 +157,9 @@ TEST_CASE("data_batch_processing_handle RAII", "[data_batch]")
     {
       // Create another handle (can lock while already processing)
       REQUIRE(batch.try_to_create_task() == true);
-      REQUIRE(batch.try_to_lock_for_processing() == true);
-      data_batch_processing_handle handle2(&batch);
+      auto r2 = batch.try_to_lock_for_processing();
+      REQUIRE(r2.success == true);
+      auto handle2 = std::move(r2.handle);
 
       REQUIRE(batch.get_processing_count() == 2);
     }  // handle2 goes out of scope
@@ -177,7 +189,8 @@ TEST_CASE("data_batch In Transit Blocks Processing", "[data_batch]")
   REQUIRE(batch.get_state() == batch_state::in_transit);
 
   // Try to lock for processing should fail while in_transit
-  REQUIRE(batch.try_to_lock_for_processing() == false);
+  auto in_transit = batch.try_to_lock_for_processing();
+  REQUIRE(in_transit.success == false);
   REQUIRE(batch.get_processing_count() == 0);
 
   // Release the in_transit lock
@@ -193,8 +206,9 @@ TEST_CASE("data_batch Cannot Go In Transit While Processing", "[data_batch]")
 
   // Create task and start processing
   REQUIRE(batch.try_to_create_task() == true);
-  REQUIRE(batch.try_to_lock_for_processing() == true);
-  data_batch_processing_handle handle(&batch);
+  auto r = batch.try_to_lock_for_processing();
+  REQUIRE(r.success == true);
+  auto handle = std::move(r.handle);
 
   REQUIRE(batch.get_state() == batch_state::processing);
 
@@ -265,7 +279,9 @@ TEST_CASE("data_batch Thread-Safe Processing Count", "[data_batch]")
       for (int j = 0; j < locks_per_thread; ++j) {
         // Create task first so threads can lock for processing
         REQUIRE(batch.try_to_create_task() == true);
-        if (batch.try_to_lock_for_processing()) { thread_handles[i].emplace_back(&batch); }
+        auto r = batch.try_to_lock_for_processing();
+        REQUIRE(r.success == true);
+        thread_handles[i].push_back(std::move(r.handle));
       }
     });
   }
@@ -318,9 +334,11 @@ TEST_CASE("data_batch Zero Processing Count", "[data_batch]")
 
   // Create task and lock for processing
   REQUIRE(batch.try_to_create_task() == true);
-  REQUIRE(batch.try_to_lock_for_processing() == true);
   {
-    data_batch_processing_handle handle(&batch);
+    auto r = batch.try_to_lock_for_processing();
+    REQUIRE(r.success == true);
+    auto handle = std::move(r.handle);
+    REQUIRE(handle.valid());
     REQUIRE(batch.get_processing_count() == 1);
     REQUIRE(batch.get_state() == batch_state::processing);
   }  // Handle goes out of scope
@@ -331,7 +349,10 @@ TEST_CASE("data_batch Zero Processing Count", "[data_batch]")
 
   // Can create task and lock again from idle
   REQUIRE(batch.try_to_create_task() == true);
-  REQUIRE(batch.try_to_lock_for_processing() == true);
+  auto r2 = batch.try_to_lock_for_processing();
+  REQUIRE(r2.success == true);
+  auto handle2 = std::move(r2.handle);
+  REQUIRE(handle2.valid());
   REQUIRE(batch.get_processing_count() == 1);
 }
 
@@ -359,8 +380,9 @@ TEST_CASE("data_batch Move Requires Zero Processing Count", "[data_batch]")
     auto data = std::make_unique<mock_data_representation>(memory::Tier::GPU, 1024);
     data_batch batch1(1, std::move(data));
     batch1.try_to_create_task();
-    batch1.try_to_lock_for_processing();
-    data_batch_processing_handle handle(&batch1);
+    auto r = batch1.try_to_lock_for_processing();
+    REQUIRE(r.success == true);
+    auto handle = std::move(r.handle);
 
     REQUIRE_THROWS_AS([&]() { data_batch batch2(std::move(batch1)); }(), std::runtime_error);
   }
@@ -392,8 +414,9 @@ TEST_CASE("data_batch Rapid Processing Cycles", "[data_batch]")
     std::vector<data_batch_processing_handle> handles;
     for (int i = 0; i < 10; ++i) {
       REQUIRE(batch.try_to_create_task() == true);
-      REQUIRE(batch.try_to_lock_for_processing() == true);
-      handles.emplace_back(&batch);
+      auto r = batch.try_to_lock_for_processing();
+      REQUIRE(r.success == true);
+      handles.push_back(std::move(r.handle));
     }
     REQUIRE(batch.get_processing_count() == 10);
     REQUIRE(batch.get_state() == batch_state::processing);
@@ -426,11 +449,9 @@ TEST_CASE("data_batch Smart Pointer Lifecycle", "[data_batch]")
 
     // Both point to the same batch
     batch->try_to_create_task();
-    batch->try_to_lock_for_processing();
-    {
-      data_batch_processing_handle handle(batch.get());
-      REQUIRE(batch_copy->get_processing_count() == 1);
-    }  // Handle releases
+    auto r = batch->try_to_lock_for_processing();
+    REQUIRE(r.success == true);
+    REQUIRE(batch_copy->get_processing_count() == 1);
 
     REQUIRE(batch->get_processing_count() == 0);
   }
@@ -457,11 +478,16 @@ TEST_CASE("data_batch_processing_handle Move Semantics", "[data_batch]")
   data_batch batch(1, std::move(data));
 
   REQUIRE(batch.try_to_create_task() == true);
-  REQUIRE(batch.try_to_lock_for_processing() == true);
+  auto r = batch.try_to_lock_for_processing();
+  REQUIRE(r.success == true);
+  auto h = std::move(r.handle);
+  REQUIRE(h.valid());
   REQUIRE(batch.get_processing_count() == 1);
 
   {
-    data_batch_processing_handle handle1(&batch);
+    auto r1 = batch.try_to_lock_for_processing();
+    REQUIRE(r1.success == true);
+    auto handle1 = std::move(r1.handle);
 
     // Move construct
     data_batch_processing_handle handle2(std::move(handle1));
@@ -483,8 +509,9 @@ TEST_CASE("data_batch_processing_handle Explicit Release", "[data_batch]")
   data_batch batch(1, std::move(data));
 
   REQUIRE(batch.try_to_create_task() == true);
-  REQUIRE(batch.try_to_lock_for_processing() == true);
-  data_batch_processing_handle handle(&batch);
+  auto r = batch.try_to_lock_for_processing();
+  REQUIRE(r.success == true);
+  auto handle = std::move(r.handle);
 
   REQUIRE(batch.get_processing_count() == 1);
 
@@ -542,8 +569,10 @@ TEST_CASE("data_batch Task Created State Transitions", "[data_batch]")
   REQUIRE(batch.get_state() == batch_state::task_created);
 
   // Go to processing
-  REQUIRE(batch.try_to_lock_for_processing() == true);
-  data_batch_processing_handle handle(&batch);
+  auto r = batch.try_to_lock_for_processing();
+  REQUIRE(r.success == true);
+  auto handle = std::move(r.handle);
+  REQUIRE(handle.valid());
   REQUIRE(batch.get_state() == batch_state::processing);
 
   // Can call try_to_create_task while processing (idempotent)

@@ -98,8 +98,8 @@ class idata_repository {
    * State transition behavior:
    * - task_created: Calls try_to_create_task() on the batch. Succeeds for idle,
    *   task_created, or processing batches. Processing batches stay in processing state.
-   * - processing: Calls try_to_lock_for_processing() on the batch. Succeeds for
-   *   task_created or processing batches.
+   * - processing: Not allowed here; an exception is thrown. Callers should pull with
+   *   task_created and then manually call try_to_lock_for_processing() on the returned batch.
    * - in_transit: Calls try_to_lock_for_in_transit() on the batch. Succeeds only
    *   for idle batches with no active processing.
    *
@@ -107,11 +107,12 @@ class idata_repository {
    * - A new batch is added to the repository
    * - notify_state_change() is called
    *
-   * @param target_state The state to transition the batch to
+   * @param target_state The state to transition the batch to (must not be processing)
    * @return PtrType The data batch that was successfully transitioned, or nullptr
    *         if the repository is empty after waiting.
    *
    * @note Thread-safe operation protected by internal mutex and condition variable
+   * @throws std::runtime_error if target_state is batch_state::processing
    */
   virtual PtrType pull_data_batch(batch_state target_state)
   {
@@ -128,8 +129,9 @@ class idata_repository {
         switch (target_state) {
           case batch_state::task_created: can_transition = batch_ptr->try_to_create_task(); break;
           case batch_state::processing:
-            can_transition = batch_ptr->try_to_lock_for_processing();
-            break;
+            throw std::runtime_error(
+              "pull_data_batch cannot transition directly to processing; "
+              "pull with task_created and call try_to_lock_for_processing() on the batch");
           case batch_state::in_transit:
             can_transition = batch_ptr->try_to_lock_for_in_transit();
             break;

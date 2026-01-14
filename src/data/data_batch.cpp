@@ -142,22 +142,23 @@ bool data_batch::try_to_cancel_task()
   }
   return false;
 }
-bool data_batch::try_to_lock_for_processing()
+lock_for_processing_result data_batch::try_to_lock_for_processing()
 {
   std::lock_guard<std::mutex> lock(_mutex);
-  if (_state == batch_state::task_created || _state == batch_state::processing) {
-    // Decrement task_created_count each time we lock for processing
-    if (_task_created_count == 0) {
-      throw std::runtime_error(
-        "Cannot lock for processing: task_created_count is zero. "
-        "try_to_create_task() must be called before try_to_lock_for_processing()");
-    }
-    --_task_created_count;
-    ++_processing_count;
-    _state = batch_state::processing;
-    return true;
+
+  if (_task_created_count == 0) {
+    throw std::runtime_error(
+      "Cannot lock for processing: task_created_count is zero. "
+      "try_to_create_task() must be called before try_to_lock_for_processing()");
   }
-  return false;
+
+  if (!(_state == batch_state::task_created || _state == batch_state::processing)) {
+    return lock_for_processing_result{false, data_batch_processing_handle{}};
+  }
+  --_task_created_count;
+  ++_processing_count;
+  _state = batch_state::processing;
+  return lock_for_processing_result{true, data_batch_processing_handle{this}};
 }
 
 bool data_batch::try_to_lock_for_in_transit()
@@ -190,7 +191,10 @@ void data_batch::decrement_processing_count()
     throw std::runtime_error("Cannot decrement processing count: processing count is already zero");
   }
   _processing_count -= 1;
-  if (_processing_count == 0) { _state = batch_state::idle; }
+  if (_processing_count == 0) {
+    // Preserve pending task_created intent if any remain
+    _state = (_task_created_count > 0) ? batch_state::task_created : batch_state::idle;
+  }
 }
 
 }  // namespace cucascade
