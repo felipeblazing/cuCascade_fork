@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 
-#include "data/cpu_data_representation.hpp"
-#include "data/gpu_data_representation.hpp"
-#include "data/representation_converter.hpp"
 #include "utils/cudf_test_utils.hpp"
 #include "utils/mock_test_utils.hpp"
+
+#include <cucascade/data/cpu_data_representation.hpp>
+#include <cucascade/data/gpu_data_representation.hpp>
+#include <cucascade/data/representation_converter.hpp>
 
 #include <rmm/cuda_stream.hpp>
 #include <rmm/cuda_stream_view.hpp>
