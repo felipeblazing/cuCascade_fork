@@ -56,3 +56,60 @@ jobs:
 
       - name: Run tests
         run: pixi run test
+
+  benchmarks:
+    needs: build
+    runs-on: nv-gpu-arm64-l4-1gpu
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-release
+          path: .
+
+      - name: Install pixi
+        run: |
+          curl -fsSL https://pixi.sh/install.sh | bash
+          echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        run: pixi install
+
+      - name: Run benchmarks (PR)
+        run: |
+          cd build/release
+          ./benchmark/cucascade_benchmarks \
+            --benchmark_format=json \
+            --benchmark_out="${GITHUB_WORKSPACE}/bench_pr.json"
+
+      - name: Checkout main for baseline
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: baseline-src
+
+      - name: Install dependencies (baseline)
+        run: cd baseline-src && pixi install
+
+      - name: Build baseline
+        run: cd baseline-src && pixi run build
+
+      - name: Run benchmarks (baseline)
+        run: |
+          cd baseline-src/build/release
+          ./benchmark/cucascade_benchmarks \
+            --benchmark_format=json \
+            --benchmark_out="${GITHUB_WORKSPACE}/bench_main.json"
+
+      - name: Compare benchmark totals
+        env:
+          BENCHMARK_REGRESSION_PCT: "10"
+        run: |
+          pixi run python scripts/compare_benchmarks.py \
+            --baseline "${GITHUB_WORKSPACE}/bench_main.json" \
+            --current "${GITHUB_WORKSPACE}/bench_pr.json" \
+            --max-regression-pct "${BENCHMARK_REGRESSION_PCT}"
