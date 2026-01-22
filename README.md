@@ -34,7 +34,7 @@ cmake --build build/release
 cd build/release && ctest --output-on-failure
 
 # Run benchmarks (optional)
-cd build/release && ./benchmark/cucascade_benchmarks
+pixi run benchmarks
 ```
 
 # Requirements
@@ -108,7 +108,7 @@ pixi run build
 pixi run test
 
 # Run benchmarks
-cd build/release && ./benchmark/cucascade_benchmarks
+pixi run benchmarks
 ```
 
 ## Pre-commit Hooks
