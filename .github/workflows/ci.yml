@@ -59,7 +59,7 @@ jobs:
 
   benchmarks:
     needs: build
-    runs-on: nv-gpu-arm64-l4-1gpu
+    runs-on: linux-amd64-gpu-t4-latest-1
 
     steps:
       - name: Checkout source
