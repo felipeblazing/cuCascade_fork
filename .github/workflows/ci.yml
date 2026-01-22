@@ -44,7 +44,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-release
-          path: .
+          path: build/release
 
       - name: Install pixi
         run: |
@@ -69,7 +69,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: build-release
-          path: .
+          path: build/release
 
       - name: Install pixi
         run: |
