@@ -37,7 +37,8 @@ host_table_representation::get_host_table() const
   return _host_table;
 }
 
-std::unique_ptr<idata_representation> host_table_representation::clone(rmm::cuda_stream_view stream)
+std::unique_ptr<idata_representation> host_table_representation::clone(
+  [[maybe_unused]] rmm::cuda_stream_view stream)
 {
   // Get the host memory resource from the memory space
   auto* host_mr = get_memory_space().get_memory_resource_of<memory::Tier::HOST>();

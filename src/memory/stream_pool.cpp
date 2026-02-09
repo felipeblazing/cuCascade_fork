@@ -32,7 +32,7 @@ borrowed_stream::borrowed_stream(rmm::cuda_stream s,
 {
 }
 
-borrowed_stream::~borrowed_stream() = default;
+borrowed_stream::~borrowed_stream() noexcept { reset(); }
 
 borrowed_stream::borrowed_stream(borrowed_stream&& other) noexcept
   : _stream(std::move(other._stream)), _release_fn(std::exchange(other._release_fn, nullptr))
