@@ -171,30 +171,35 @@ class data_repository_manager {
   uint64_t get_next_data_batch_id() { return _next_data_batch_id++; }
 
   /**
+   * @brief Info about leaked batches in a single repository after clear.
+   */
+  struct leaked_repository_info {
+    size_t operator_id;
+    std::string port_id;
+    std::size_t count;
+  };
+
+  /**
    * @brief Clear all repositories and report any that still contained data.
    *
    * Should be called between queries to reset state. If any repository still has
    * un-consumed data batches, this is a bug — it means some operator didn't fully
-   * drain its input. This method logs those cases and returns the total number of
-   * leaked batches.
+   * drain its input.
    *
-   * @return The total number of data batches that were still in repositories (0 = clean).
+   * @return Per-repository info for each repository that still had un-consumed batches.
    */
-  std::size_t clear_all_repositories()
+  std::vector<leaked_repository_info> clear_all_repositories()
   {
     std::lock_guard<std::mutex> lock(_mutex);
-    std::size_t total_leaked = 0;
+    std::vector<leaked_repository_info> leaked;
     for (auto& [key, repo] : _repositories) {
       if (repo) {
         auto count = repo->total_size();
-        if (count > 0) {
-          total_leaked += count;
-          // TODO: add proper logging once spdlog is available in cucascade headers
-        }
+        if (count > 0) { leaked.push_back({key.operator_id, key.port_id, count}); }
       }
     }
     _repositories.clear();
-    return total_leaked;
+    return leaked;
   }
 
   /**
