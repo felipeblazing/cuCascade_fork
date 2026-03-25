@@ -49,6 +49,9 @@ find_package(rmm REQUIRED CONFIG)
 # Find cudf for data representation support
 find_package(cudf REQUIRED CONFIG)
 
+# Find kvikIO for disk I/O backend
+find_package(kvikio REQUIRED)
+
 # Find numa (provided by numactl-devel or libnuma-dev depending on the package
 # manager)
 find_library(NUMA_LIB numa REQUIRED)
@@ -131,6 +134,7 @@ target_include_directories(cucascade_objects
 
 # Link dependencies to object library
 target_link_libraries(cucascade_objects PUBLIC ${CUCASCADE_PUBLIC_LINK_LIBS})
+target_link_libraries(cucascade_objects PRIVATE kvikio::kvikio)
 
 # cxx_std_20 is PUBLIC so consumers know they need C++20 to use our headers.
 # cuda_std_20 is kept separate and applied PRIVATE to cucascade_objects to avoid
