@@ -1450,6 +1450,22 @@ void register_builtin_converters(representation_converter_registry& registry,
               rmm::cuda_stream_view stream) {
       return convert_disk_to_host_data(source, target_memory_space, stream, *backend);
     });
+
+  // GPU -> DISK (per CONV-01)
+  registry.register_converter<gpu_table_representation, disk_data_representation>(
+    [backend](idata_representation& source,
+              const memory::memory_space* target_memory_space,
+              rmm::cuda_stream_view stream) {
+      return convert_gpu_to_disk(source, target_memory_space, stream, *backend);
+    });
+
+  // DISK -> GPU (per CONV-02)
+  registry.register_converter<disk_data_representation, gpu_table_representation>(
+    [backend](idata_representation& source,
+              const memory::memory_space* target_memory_space,
+              rmm::cuda_stream_view stream) {
+      return convert_disk_to_gpu(source, target_memory_space, stream, *backend);
+    });
 }
 
 }  // namespace cucascade
