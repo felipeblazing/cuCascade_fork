@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cucascade/data/common.hpp>
+#include <cucascade/data/disk_io_backend.hpp>
 #include <cucascade/memory/memory_space.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
@@ -253,5 +254,17 @@ class representation_converter_registry {
  * @param registry The converter registry to register converters with.
  */
 void register_builtin_converters(representation_converter_registry& registry);
+
+/**
+ * @brief Initialize the built-in representation converters with a specific disk I/O backend.
+ *
+ * This overload captures the provided backend in disk converter lambdas.
+ * The original overload creates a default KVIKIO backend.
+ *
+ * @param registry The converter registry to register converters with.
+ * @param backend The disk I/O backend to use for disk converters.
+ */
+void register_builtin_converters(representation_converter_registry& registry,
+                                 std::shared_ptr<idisk_io_backend> backend);
 
 }  // namespace cucascade
