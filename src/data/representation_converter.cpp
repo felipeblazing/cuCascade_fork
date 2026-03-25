@@ -1152,6 +1152,251 @@ static std::unique_ptr<idata_representation> convert_disk_to_host_data(
     std::move(host_alloc), const_cast<memory::memory_space*>(target_memory_space));
 }
 
+// =============================================================================
+// Disk <-> GPU converters
+// =============================================================================
+
+/**
+ * @brief Recursively write GPU column buffers directly to disk at computed file offsets.
+ *
+ * Uses write_device for direct GPU-to-disk DMA (via GDS or kvikIO fallback).
+ */
+static void write_gpu_column_buffers(const cudf::column_view& col,
+                                     const memory::column_metadata& disk_meta,
+                                     const std::string& file_path,
+                                     idisk_io_backend& backend,
+                                     rmm::cuda_stream_view stream)
+{
+  if (disk_meta.has_null_mask && disk_meta.null_mask_size > 0) {
+    backend.write_device(
+      file_path, col.null_mask(), disk_meta.null_mask_size, disk_meta.null_mask_offset, stream);
+  }
+  if (disk_meta.has_data && disk_meta.data_size > 0) {
+    backend.write_device(
+      file_path, col.data<uint8_t>(), disk_meta.data_size, disk_meta.data_offset, stream);
+  }
+  for (cudf::size_type i = 0; i < col.num_children(); ++i) {
+    write_gpu_column_buffers(
+      col.child(i), disk_meta.children[static_cast<std::size_t>(i)], file_path, backend, stream);
+  }
+}
+
+/**
+ * @brief Convert gpu_table_representation to disk_data_representation.
+ *
+ * Writes GPU table buffers directly to disk via write_device (GDS/kvikIO).
+ * File format: disk_file_header + serialized column_metadata + 4KB-aligned column data.
+ */
+static std::unique_ptr<idata_representation> convert_gpu_to_disk(
+  idata_representation& source,
+  const memory::memory_space* target_memory_space,
+  rmm::cuda_stream_view stream,
+  idisk_io_backend& backend)
+{
+  auto& gpu_source         = source.cast<gpu_table_representation>();
+  const auto& table        = gpu_source.get_table();
+  cudf::table_view tv      = table.view();
+
+  // Generate unique file path under the disk memory space's mount directory
+  auto mount_path = target_memory_space->get_disk_mount_path();
+  auto file_path  = memory::generate_disk_file_path(mount_path);
+
+  disk_file_guard guard{file_path};
+
+  // Plan column layout with 8-byte aligned offsets (same as host path)
+  std::size_t plan_offset = 0;
+  std::vector<memory::column_metadata> planned_columns;
+  planned_columns.reserve(static_cast<std::size_t>(tv.num_columns()));
+  for (cudf::size_type i = 0; i < tv.num_columns(); ++i) {
+    planned_columns.push_back(plan_column_copy(tv.column(i), plan_offset, stream));
+  }
+
+  // Serialize metadata to compute its size, then compute data offset
+  auto metadata_bytes_for_sizing = serialize_column_metadata(planned_columns);
+  std::size_t data_offset_in_file =
+    align_up(sizeof(disk_file_header) + metadata_bytes_for_sizing.size(), DISK_FILE_ALIGNMENT);
+
+  // Recompute with 4KB-aligned disk offsets
+  std::size_t cursor = data_offset_in_file;
+  std::vector<memory::column_metadata> disk_columns;
+  disk_columns.reserve(planned_columns.size());
+  for (const auto& col : planned_columns) {
+    disk_columns.push_back(recompute_file_offsets(col, cursor));
+  }
+  std::size_t total_file_data_size = cursor - data_offset_in_file;
+
+  // Build header
+  disk_file_header header{};
+  header.num_columns = static_cast<uint32_t>(disk_columns.size());
+  auto metadata_bytes = serialize_column_metadata(disk_columns);
+  header.metadata_size = metadata_bytes.size();
+  header.data_offset   = data_offset_in_file;
+
+  // Write header and metadata via host I/O (small host-memory structures)
+  backend.write_host(file_path, &header, sizeof(header), 0);
+  if (!metadata_bytes.empty()) {
+    backend.write_host(
+      file_path, metadata_bytes.data(), metadata_bytes.size(), sizeof(disk_file_header));
+  }
+
+  // Write column data buffers directly from GPU via write_device
+  for (cudf::size_type i = 0; i < tv.num_columns(); ++i) {
+    write_gpu_column_buffers(
+      tv.column(i), disk_columns[static_cast<std::size_t>(i)], file_path, backend, stream);
+  }
+
+  guard.release();
+
+  auto disk_table = std::make_unique<memory::disk_table_allocation>(
+    std::move(file_path), std::move(disk_columns), total_file_data_size);
+  return std::make_unique<disk_data_representation>(
+    std::move(disk_table), const_cast<memory::memory_space&>(*target_memory_space));
+}
+
+/**
+ * @brief Allocate an rmm::device_buffer and read data from disk directly into it.
+ */
+static rmm::device_buffer alloc_and_read_from_disk(const std::string& file_path,
+                                                    std::size_t file_offset,
+                                                    std::size_t size,
+                                                    rmm::cuda_stream_view stream,
+                                                    rmm::mr::device_memory_resource* mr,
+                                                    idisk_io_backend& backend)
+{
+  rmm::device_buffer buf(size, stream, mr);
+  if (size > 0) { backend.read_device(file_path, buf.data(), size, file_offset, stream); }
+  return buf;
+}
+
+/**
+ * @brief Recursively reconstruct a cudf::column from disk column_metadata, reading directly
+ * from disk into device buffers via read_device.
+ */
+static std::unique_ptr<cudf::column> reconstruct_column_from_disk(
+  const memory::column_metadata& meta,
+  const std::string& file_path,
+  rmm::cuda_stream_view stream,
+  rmm::mr::device_memory_resource* mr,
+  idisk_io_backend& backend)
+{
+  // Null mask (shared by all type categories)
+  rmm::device_buffer null_mask{};
+  if (meta.has_null_mask) {
+    null_mask =
+      alloc_and_read_from_disk(file_path, meta.null_mask_offset, meta.null_mask_size, stream, mr, backend);
+  }
+  const cudf::size_type null_count = meta.has_null_mask ? meta.null_count : 0;
+
+  if (meta.type_id == cudf::type_id::STRING) {
+    if (meta.children.size() < 1) {
+      throw std::invalid_argument(
+        "reconstruct_column_from_disk: STRING column metadata must have at least one child (offsets)");
+    }
+    return cudf::make_strings_column(
+      meta.num_rows,
+      reconstruct_column_from_disk(meta.children[0], file_path, stream, mr, backend),
+      meta.has_data && meta.data_size > 0
+        ? alloc_and_read_from_disk(file_path, meta.data_offset, meta.data_size, stream, mr, backend)
+        : rmm::device_buffer{},
+      null_count,
+      std::move(null_mask));
+  }
+
+  if (meta.type_id == cudf::type_id::LIST) {
+    if (meta.children.size() < 2) {
+      throw std::invalid_argument(
+        "reconstruct_column_from_disk: LIST column metadata must have two children (offsets, values)");
+    }
+    return cudf::make_lists_column(
+      meta.num_rows,
+      reconstruct_column_from_disk(meta.children[0], file_path, stream, mr, backend),
+      reconstruct_column_from_disk(meta.children[1], file_path, stream, mr, backend),
+      null_count,
+      std::move(null_mask));
+  }
+
+  if (meta.type_id == cudf::type_id::STRUCT) {
+    std::vector<std::unique_ptr<cudf::column>> fields;
+    fields.reserve(meta.children.size());
+    for (const auto& child_meta : meta.children) {
+      fields.push_back(reconstruct_column_from_disk(child_meta, file_path, stream, mr, backend));
+    }
+    return cudf::make_structs_column(
+      meta.num_rows, std::move(fields), null_count, std::move(null_mask));
+  }
+
+  const cudf::data_type dtype = cudf::is_fixed_point(cudf::data_type{meta.type_id})
+                                  ? cudf::data_type{meta.type_id, meta.scale}
+                                  : cudf::data_type{meta.type_id};
+  return std::make_unique<cudf::column>(
+    dtype,
+    meta.num_rows,
+    meta.has_data && meta.data_size > 0
+      ? alloc_and_read_from_disk(file_path, meta.data_offset, meta.data_size, stream, mr, backend)
+      : rmm::device_buffer{},
+    std::move(null_mask),
+    null_count);
+}
+
+/**
+ * @brief Convert disk_data_representation to gpu_table_representation.
+ *
+ * Reads a disk file directly into GPU device buffers via read_device (GDS/kvikIO).
+ * Validates the header, deserializes metadata, then reconstructs each column on device.
+ */
+static std::unique_ptr<idata_representation> convert_disk_to_gpu(
+  idata_representation& source,
+  const memory::memory_space* target_memory_space,
+  rmm::cuda_stream_view stream,
+  idisk_io_backend& backend)
+{
+  auto& disk_source      = source.cast<disk_data_representation>();
+  const auto& disk_table = disk_source.get_disk_table();
+  const auto& file_path  = disk_table.file_path;
+
+  // Read and validate header
+  disk_file_header header{};
+  backend.read_host(file_path, &header, sizeof(header), 0);
+
+  if (header.magic != DISK_FILE_MAGIC) {
+    throw std::runtime_error("Invalid disk file magic number");
+  }
+  if (header.version != DISK_FILE_FORMAT_VERSION) {
+    throw std::runtime_error("Unsupported disk file format version");
+  }
+
+  // Read serialized metadata
+  std::vector<uint8_t> metadata_bytes(header.metadata_size);
+  if (header.metadata_size > 0) {
+    backend.read_host(
+      file_path, metadata_bytes.data(), header.metadata_size, sizeof(disk_file_header));
+  }
+
+  auto disk_columns = deserialize_column_metadata(metadata_bytes.data(), metadata_bytes.size());
+
+  // Set CUDA device to target GPU
+  int previous_device = -1;
+  CUCASCADE_CUDA_TRY(cudaGetDevice(&previous_device));
+  CUCASCADE_CUDA_TRY(cudaSetDevice(target_memory_space->get_device_id()));
+
+  auto mr = target_memory_space->get_default_allocator();
+
+  // Reconstruct columns by reading directly from disk into device buffers
+  std::vector<std::unique_ptr<cudf::column>> gpu_columns;
+  gpu_columns.reserve(disk_columns.size());
+  for (const auto& col_meta : disk_columns) {
+    gpu_columns.push_back(reconstruct_column_from_disk(col_meta, file_path, stream, mr, backend));
+  }
+
+  stream.synchronize();
+
+  CUCASCADE_CUDA_TRY(cudaSetDevice(previous_device));
+
+  auto new_table = std::make_unique<cudf::table>(std::move(gpu_columns));
+  return std::make_unique<gpu_table_representation>(
+    std::move(new_table), *const_cast<memory::memory_space*>(target_memory_space));
+}
+
 }  // namespace
 
 void register_builtin_converters(representation_converter_registry& registry)
