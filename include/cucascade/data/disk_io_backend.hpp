@@ -22,15 +22,26 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace cucascade {
+
+/**
+ * @brief Descriptor for a single I/O operation in a batch.
+ */
+struct io_batch_entry {
+  const void* ptr;          ///< Device or host memory pointer
+  std::size_t size;         ///< Number of bytes
+  std::size_t file_offset;  ///< Byte offset in the file
+};
 
 /**
  * @brief Enumeration of available disk I/O backend types.
  */
 enum class io_backend_type {
-  KVIKIO,  ///< kvikIO with automatic GDS/POSIX fallback
-  GDS      ///< Raw cuFile/GDS direct I/O
+  KVIKIO,   ///< kvikIO with automatic GDS/POSIX fallback
+  GDS,      ///< Raw cuFile/GDS direct I/O with batch API
+  PIPELINE  ///< Double-buffered pinned host pipeline (D2H overlap with disk write)
 };
 
 /**
@@ -99,6 +110,44 @@ class idisk_io_backend {
                          void* host_ptr,
                          std::size_t size,
                          std::size_t file_offset) = 0;
+
+  /**
+   * @brief Write multiple device memory buffers to a disk file in a single batch.
+   *
+   * Enables backends to submit all I/O operations at once (e.g., cuFile batch API)
+   * for higher throughput than individual write_device calls.
+   *
+   * Default implementation falls back to sequential write_device calls.
+   *
+   * @param path File path to write to.
+   * @param entries Vector of I/O batch entries (device pointers, sizes, file offsets).
+   * @param stream CUDA stream for synchronization.
+   */
+  virtual void write_device_batch(const std::string& path,
+                                  const std::vector<io_batch_entry>& entries,
+                                  rmm::cuda_stream_view stream)
+  {
+    for (const auto& entry : entries) {
+      write_device(path, entry.ptr, entry.size, entry.file_offset, stream);
+    }
+  }
+
+  /**
+   * @brief Read multiple buffers from a disk file into device memory in a single batch.
+   *
+   * @param path File path to read from.
+   * @param entries Vector of I/O batch entries (device pointers, sizes, file offsets).
+   *               The ptr fields point to destination device memory (non-const).
+   * @param stream CUDA stream for synchronization.
+   */
+  virtual void read_device_batch(const std::string& path,
+                                 const std::vector<io_batch_entry>& entries,
+                                 rmm::cuda_stream_view stream)
+  {
+    for (const auto& entry : entries) {
+      read_device(path, const_cast<void*>(entry.ptr), entry.size, entry.file_offset, stream);
+    }
+  }
 };
 
 /**

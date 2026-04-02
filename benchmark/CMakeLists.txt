@@ -53,12 +53,16 @@ target_include_directories(
   cucascade_benchmarks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                                ${benchmark_SOURCE_DIR}/include)
 
-# Apply warning flags to benchmark executable
+# Apply warning flags to benchmark executable. Suppress -Wnull-dereference:
+# triggered by RAPIDS/CCCL system headers
+# (cuda/__utility/__basic_any/basic_any_value.h, virtcall.h) which we cannot
+# fix.
 target_compile_options(
   cucascade_benchmarks
-  PRIVATE $<$<COMPILE_LANGUAGE:C>:${CUCASCADE_CXX_WARNING_FLAGS}>
-          $<$<COMPILE_LANGUAGE:CXX>:${CUCASCADE_CXX_WARNING_FLAGS}>
-          ${CUCASCADE_CUDA_WARNING_FLAGS})
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:${CUCASCADE_CXX_WARNING_FLAGS}>
+    $<$<COMPILE_LANGUAGE:CXX>:${CUCASCADE_CXX_WARNING_FLAGS};-Wno-null-dereference>
+    ${CUCASCADE_CUDA_WARNING_FLAGS})
 
 # Link dependencies
 target_link_libraries(cucascade_benchmarks

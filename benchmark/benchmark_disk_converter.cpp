@@ -23,18 +23,20 @@
 #include "cucascade/memory/config.hpp"
 #include "cucascade/memory/memory_reservation_manager.hpp"
 
+#include <cucascade/cuda_utils.hpp>
+
 #include <cudf/column/column_factories.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
-
-#include <cucascade/cuda_utils.hpp>
 
 #include <rmm/cuda_stream.hpp>
 
 #include <cuda_runtime_api.h>
 
 #include <benchmark/benchmark.h>
+#include <unistd.h>
 
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -49,6 +51,22 @@ using namespace cucascade::memory;
 constexpr uint64_t KiB = 1024ULL;
 constexpr uint64_t MiB = 1024ULL * KiB;
 constexpr uint64_t GiB = 1024ULL * MiB;
+
+/**
+ * @brief Ensure kvikIO uses O_DIRECT (no page cache) for fair comparison with GDS.
+ *
+ * Sets KVIKIO_COMPAT_MODE=OFF which forces kvikIO to open files with O_DIRECT,
+ * bypassing the OS page cache. This makes kvikIO and GDS benchmarks comparable
+ * since both hit disk directly.
+ */
+void ensure_kvikio_direct_io()
+{
+  static bool set = false;
+  if (!set) {
+    ::setenv("KVIKIO_COMPAT_MODE", "OFF", 1);
+    set = true;
+  }
+}
 
 // For non-NUMA systems, this should be -1, causing the allocator to use cudaHostAlloc instead of
 // cudaHostRegister
@@ -66,7 +84,7 @@ std::vector<memory_space_config> create_benchmark_configs()
 
   gpu_memory_space_config gpu_config;
   gpu_config.device_id       = 0;
-  gpu_config.memory_capacity = 8 * GiB;
+  gpu_config.memory_capacity = 16 * GiB;
   gpu_config.mr_factory_fn   = make_default_allocator_for_tier(Tier::GPU);
   configs.emplace_back(gpu_config);
 
@@ -79,7 +97,7 @@ std::vector<memory_space_config> create_benchmark_configs()
 
   disk_memory_space_config disk_config;
   disk_config.disk_id         = 0;
-  disk_config.memory_capacity = 16 * GiB;
+  disk_config.memory_capacity = 32 * GiB;
   disk_config.mount_paths     = "/tmp";
   configs.emplace_back(disk_config);
 
@@ -99,6 +117,7 @@ std::shared_ptr<memory_reservation_manager> get_shared_memory_manager()
  */
 void DoSetup([[maybe_unused]] const benchmark::State& state)
 {
+  ensure_kvikio_direct_io();
   if (!g_shared_memory_manager) {
     g_shared_memory_manager =
       std::make_shared<memory_reservation_manager>(create_benchmark_configs());
@@ -107,10 +126,15 @@ void DoSetup([[maybe_unused]] const benchmark::State& state)
 
 /**
  * @brief Teardown function called after benchmarks.
+ *
+ * Intentionally does NOT reset the memory manager — disk benchmarks create
+ * disk_data_representation objects whose files live under the disk memory space
+ * mount path. Resetting the manager between benchmarks would invalidate
+ * disk files still referenced by later benchmark iterations.
  */
 void DoTeardown([[maybe_unused]] const benchmark::State& state)
 {
-  g_shared_memory_manager.reset();
+  // no-op: manager persists across benchmark functions
 }
 
 /**
@@ -231,8 +255,8 @@ cudf::table create_list_benchmark_table(int64_t total_bytes, int num_columns)
 {
   constexpr int elements_per_list              = 4;
   constexpr int64_t bytes_per_list_element_row = elements_per_list * sizeof(int32_t);
-  int64_t bytes_per_column = total_bytes / static_cast<int64_t>(num_columns);
-  int64_t num_lists        = bytes_per_column / bytes_per_list_element_row;
+  int64_t bytes_per_column                     = total_bytes / static_cast<int64_t>(num_columns);
+  int64_t num_lists                            = bytes_per_column / bytes_per_list_element_row;
   if (num_lists < 1) num_lists = 1;
   int64_t num_values = num_lists * elements_per_list;
 
@@ -291,8 +315,8 @@ cudf::table create_list_benchmark_table(int64_t total_bytes, int num_columns)
 cudf::table create_struct_benchmark_table(int64_t total_bytes, int num_columns)
 {
   constexpr int64_t bytes_per_struct_row = 16;
-  int64_t bytes_per_column              = total_bytes / static_cast<int64_t>(num_columns);
-  int64_t num_rows                      = bytes_per_column / bytes_per_struct_row;
+  int64_t bytes_per_column               = total_bytes / static_cast<int64_t>(num_columns);
+  int64_t num_rows                       = bytes_per_column / bytes_per_struct_row;
   if (num_rows < 1) num_rows = 1;
 
   rmm::cuda_stream stream;
@@ -313,8 +337,8 @@ cudf::table create_struct_benchmark_table(int64_t total_bytes, int num_columns)
     std::vector<std::unique_ptr<cudf::column>> children;
     children.push_back(std::move(field0));
     children.push_back(std::move(field1));
-    auto struct_col = cudf::make_structs_column(
-      static_cast<cudf::size_type>(num_rows), std::move(children), 0, {});
+    auto struct_col =
+      cudf::make_structs_column(static_cast<cudf::size_type>(num_rows), std::move(children), 0, {});
 
     columns.push_back(std::move(struct_col));
   }
@@ -362,6 +386,7 @@ void BM_ConvertGpuToDisk(benchmark::State& state)
   size_t bytes_transferred = gpu_rep->get_size_in_bytes();
 
   for ([[maybe_unused]] auto _ : state) {
+    // No cache eviction needed — kvikIO uses O_DIRECT (KVIKIO_COMPAT_MODE=OFF)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
@@ -398,13 +423,13 @@ void BM_ConvertDiskToGpu(benchmark::State& state)
   auto gpu_rep = std::make_unique<gpu_table_representation>(
     std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
 
-  auto disk_rep =
-    registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
+  auto disk_rep = registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
   stream.synchronize();
 
   size_t bytes_transferred = disk_rep->get_size_in_bytes();
 
   for ([[maybe_unused]] auto _ : state) {
+    // No cache eviction needed — kvikIO uses O_DIRECT (KVIKIO_COMPAT_MODE=OFF)
     auto gpu_result =
       registry->convert<gpu_table_representation>(*disk_rep, gpu_space, stream.view());
     stream.synchronize();
@@ -442,13 +467,13 @@ void BM_ConvertHostToDisk(benchmark::State& state)
   auto gpu_rep = std::make_unique<gpu_table_representation>(
     std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
 
-  auto host_rep =
-    registry->convert<host_data_representation>(*gpu_rep, host_space, stream.view());
+  auto host_rep = registry->convert<host_data_representation>(*gpu_rep, host_space, stream.view());
   stream.synchronize();
 
   size_t bytes_transferred = host_rep->get_size_in_bytes();
 
   for ([[maybe_unused]] auto _ : state) {
+    // No cache eviction needed — kvikIO uses O_DIRECT (KVIKIO_COMPAT_MODE=OFF)
     auto disk_result =
       registry->convert<disk_data_representation>(*host_rep, disk_space, stream.view());
     stream.synchronize();
@@ -486,17 +511,16 @@ void BM_ConvertDiskToHost(benchmark::State& state)
   auto gpu_rep = std::make_unique<gpu_table_representation>(
     std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
 
-  auto host_rep =
-    registry->convert<host_data_representation>(*gpu_rep, host_space, stream.view());
+  auto host_rep = registry->convert<host_data_representation>(*gpu_rep, host_space, stream.view());
   stream.synchronize();
 
-  auto disk_rep =
-    registry->convert<disk_data_representation>(*host_rep, disk_space, stream.view());
+  auto disk_rep = registry->convert<disk_data_representation>(*host_rep, disk_space, stream.view());
   stream.synchronize();
 
   size_t bytes_transferred = disk_rep->get_size_in_bytes();
 
   for ([[maybe_unused]] auto _ : state) {
+    // No cache eviction needed — kvikIO uses O_DIRECT (KVIKIO_COMPAT_MODE=OFF)
     auto host_result =
       registry->convert<host_data_representation>(*disk_rep, host_space, stream.view());
     stream.synchronize();
@@ -539,6 +563,7 @@ void BM_ConvertGpuToDiskStringColumns(benchmark::State& state)
   size_t bytes_transferred = gpu_rep->get_size_in_bytes();
 
   for ([[maybe_unused]] auto _ : state) {
+    // No cache eviction needed — kvikIO uses O_DIRECT (KVIKIO_COMPAT_MODE=OFF)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
@@ -577,6 +602,7 @@ void BM_ConvertGpuToDiskListColumns(benchmark::State& state)
   size_t bytes_transferred = gpu_rep->get_size_in_bytes();
 
   for ([[maybe_unused]] auto _ : state) {
+    // No cache eviction needed — kvikIO uses O_DIRECT (KVIKIO_COMPAT_MODE=OFF)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
@@ -615,6 +641,7 @@ void BM_ConvertGpuToDiskStructColumns(benchmark::State& state)
   size_t bytes_transferred = gpu_rep->get_size_in_bytes();
 
   for ([[maybe_unused]] auto _ : state) {
+    // No cache eviction needed — kvikIO uses O_DIRECT (KVIKIO_COMPAT_MODE=OFF)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
@@ -642,10 +669,9 @@ void BM_ConvertGpuToDiskKvikIO(benchmark::State& state)
 
   auto mgr = get_shared_memory_manager();
 
-  auto backend = make_io_backend(io_backend_type::KVIKIO);
+  auto backend  = make_io_backend(io_backend_type::KVIKIO);
   auto registry = std::make_unique<representation_converter_registry>();
-  register_builtin_converters(
-    *registry, std::shared_ptr<idisk_io_backend>(std::move(backend)));
+  register_builtin_converters(*registry, std::shared_ptr<idisk_io_backend>(std::move(backend)));
 
   const memory_space* gpu_space  = mgr->get_memory_space(Tier::GPU, 0);
   const memory_space* disk_space = mgr->get_memory_space(Tier::DISK, 0);
@@ -659,6 +685,7 @@ void BM_ConvertGpuToDiskKvikIO(benchmark::State& state)
   size_t bytes_transferred = gpu_rep->get_size_in_bytes();
 
   for ([[maybe_unused]] auto _ : state) {
+    // No cache eviction needed — kvikIO uses O_DIRECT (KVIKIO_COMPAT_MODE=OFF)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
@@ -690,14 +717,13 @@ void BM_ConvertGpuToDiskGDS(benchmark::State& state)
   std::unique_ptr<idisk_io_backend> backend;
   try {
     backend = make_io_backend(io_backend_type::GDS);
-  } catch (const std::exception&) {
-    state.SkipWithMessage("GDS backend is a stub - no real GDS available");
+  } catch (const std::exception& e) {
+    state.SkipWithMessage(std::string("GDS backend unavailable: ") + e.what());
     return;
   }
 
   auto registry = std::make_unique<representation_converter_registry>();
-  register_builtin_converters(
-    *registry, std::shared_ptr<idisk_io_backend>(std::move(backend)));
+  register_builtin_converters(*registry, std::shared_ptr<idisk_io_backend>(std::move(backend)));
 
   const memory_space* gpu_space  = mgr->get_memory_space(Tier::GPU, 0);
   const memory_space* disk_space = mgr->get_memory_space(Tier::DISK, 0);
@@ -715,12 +741,13 @@ void BM_ConvertGpuToDiskGDS(benchmark::State& state)
     auto test_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
-  } catch (const std::exception&) {
-    state.SkipWithMessage("GDS backend is a stub - no real GDS available");
+  } catch (const std::exception& e) {
+    state.SkipWithMessage(std::string("GDS I/O failed: ") + e.what());
     return;
   }
 
   for ([[maybe_unused]] auto _ : state) {
+    // No cache eviction needed — kvikIO uses O_DIRECT (KVIKIO_COMPAT_MODE=OFF)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
@@ -744,6 +771,7 @@ BENCHMARK(BM_ConvertGpuToDisk)
   ->Args({1 * MiB, 4})
   ->Args({64 * MiB, 4})
   ->Args({512 * MiB, 4})
+  ->Args({4 * GiB, 4})
   ->Unit(benchmark::kMillisecond)
   ->UseRealTime();
 
@@ -753,6 +781,7 @@ BENCHMARK(BM_ConvertDiskToGpu)
   ->Args({1 * MiB, 4})
   ->Args({64 * MiB, 4})
   ->Args({512 * MiB, 4})
+  ->Args({4 * GiB, 4})
   ->Unit(benchmark::kMillisecond)
   ->UseRealTime();
 
@@ -763,6 +792,7 @@ BENCHMARK(BM_ConvertHostToDisk)
   ->Args({1 * MiB, 4})
   ->Args({64 * MiB, 4})
   ->Args({512 * MiB, 4})
+  ->Args({4 * GiB, 4})
   ->Unit(benchmark::kMillisecond)
   ->UseRealTime();
 
@@ -772,6 +802,7 @@ BENCHMARK(BM_ConvertDiskToHost)
   ->Args({1 * MiB, 4})
   ->Args({64 * MiB, 4})
   ->Args({512 * MiB, 4})
+  ->Args({4 * GiB, 4})
   ->Unit(benchmark::kMillisecond)
   ->UseRealTime();
 
@@ -810,6 +841,7 @@ BENCHMARK(BM_ConvertGpuToDiskKvikIO)
   ->Args({1 * MiB, 4})
   ->Args({64 * MiB, 4})
   ->Args({512 * MiB, 4})
+  ->Args({4 * GiB, 4})
   ->Unit(benchmark::kMillisecond)
   ->UseRealTime();
 
@@ -819,6 +851,54 @@ BENCHMARK(BM_ConvertGpuToDiskGDS)
   ->Args({1 * MiB, 4})
   ->Args({64 * MiB, 4})
   ->Args({512 * MiB, 4})
+  ->Args({4 * GiB, 4})
+  ->Unit(benchmark::kMillisecond)
+  ->UseRealTime();
+
+// BENCH-03: Pipeline backend (double-buffered pinned host)
+void BM_ConvertGpuToDiskPipeline(benchmark::State& state)
+{
+  int64_t total_bytes = state.range(0);
+  int num_columns     = static_cast<int>(state.range(1));
+
+  auto mgr = get_shared_memory_manager();
+
+  auto backend  = make_io_backend(io_backend_type::PIPELINE);
+  auto registry = std::make_unique<representation_converter_registry>();
+  register_builtin_converters(*registry, std::shared_ptr<idisk_io_backend>(std::move(backend)));
+
+  const memory_space* gpu_space  = mgr->get_memory_space(Tier::GPU, 0);
+  const memory_space* disk_space = mgr->get_memory_space(Tier::DISK, 0);
+
+  rmm::cuda_stream stream;
+
+  auto table   = create_benchmark_table_from_bytes(total_bytes, num_columns);
+  auto gpu_rep = std::make_unique<gpu_table_representation>(
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+
+  size_t bytes_transferred = gpu_rep->get_size_in_bytes();
+
+  for ([[maybe_unused]] auto _ : state) {
+    // No cache eviction needed — pipeline uses O_DIRECT
+    auto disk_result =
+      registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
+    stream.synchronize();
+  }
+
+  state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
+                          static_cast<int64_t>(bytes_transferred));
+  state.counters["columns"] = static_cast<double>(num_columns);
+  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
+  state.counters["backend"] = 2;  // 2 = Pipeline
+}
+
+BENCHMARK(BM_ConvertGpuToDiskPipeline)
+  ->Setup(DoSetup)
+  ->Teardown(DoTeardown)
+  ->Args({1 * MiB, 4})
+  ->Args({64 * MiB, 4})
+  ->Args({512 * MiB, 4})
+  ->Args({4 * GiB, 4})
   ->Unit(benchmark::kMillisecond)
   ->UseRealTime();
 
