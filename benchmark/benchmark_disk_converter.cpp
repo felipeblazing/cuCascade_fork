@@ -52,6 +52,13 @@ constexpr uint64_t KiB = 1024ULL;
 constexpr uint64_t MiB = 1024ULL * KiB;
 constexpr uint64_t GiB = 1024ULL * MiB;
 
+// Hardware baselines from gdsio on /dev/nvme1n1 (/mnt/disk_2, ext4)
+// Measured: gdsio -D /mnt/disk_2/gdsio_test -d 0 -w 4 -s 4G -x 0 -I 1
+// Write: 6.73 GiB/s, Read: 13.35 GiB/s
+constexpr double GDSIO_WRITE_GIBS = 6.73;
+constexpr double GDSIO_READ_GIBS  = 13.35;
+constexpr double GIBS_TO_BYTES    = 1024.0 * 1024.0 * 1024.0;
+
 /**
  * @brief Ensure kvikIO uses O_DIRECT (no page cache) for fair comparison with GDS.
  *
@@ -98,7 +105,7 @@ std::vector<memory_space_config> create_benchmark_configs()
   disk_memory_space_config disk_config;
   disk_config.disk_id         = 0;
   disk_config.memory_capacity = 32 * GiB;
-  disk_config.mount_paths     = "/tmp";
+  disk_config.mount_paths     = "/mnt/disk_2";
   configs.emplace_back(disk_config);
 
   return configs;
@@ -394,8 +401,10 @@ void BM_ConvertGpuToDisk(benchmark::State& state)
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
                           static_cast<int64_t>(bytes_transferred));
-  state.counters["columns"] = static_cast<double>(num_columns);
-  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
+  state.counters["columns"]          = static_cast<double>(num_columns);
+  state.counters["bytes"]            = static_cast<double>(bytes_transferred);
+  state.counters["gdsio_write_GiBs"] = GDSIO_WRITE_GIBS;
+  state.counters["gdsio_read_GiBs"]  = GDSIO_READ_GIBS;
 }
 
 /**
@@ -437,8 +446,10 @@ void BM_ConvertDiskToGpu(benchmark::State& state)
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
                           static_cast<int64_t>(bytes_transferred));
-  state.counters["columns"] = static_cast<double>(num_columns);
-  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
+  state.counters["columns"]          = static_cast<double>(num_columns);
+  state.counters["bytes"]            = static_cast<double>(bytes_transferred);
+  state.counters["gdsio_write_GiBs"] = GDSIO_WRITE_GIBS;
+  state.counters["gdsio_read_GiBs"]  = GDSIO_READ_GIBS;
 }
 
 /**
@@ -481,8 +492,10 @@ void BM_ConvertHostToDisk(benchmark::State& state)
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
                           static_cast<int64_t>(bytes_transferred));
-  state.counters["columns"] = static_cast<double>(num_columns);
-  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
+  state.counters["columns"]          = static_cast<double>(num_columns);
+  state.counters["bytes"]            = static_cast<double>(bytes_transferred);
+  state.counters["gdsio_write_GiBs"] = GDSIO_WRITE_GIBS;
+  state.counters["gdsio_read_GiBs"]  = GDSIO_READ_GIBS;
 }
 
 /**
@@ -528,8 +541,10 @@ void BM_ConvertDiskToHost(benchmark::State& state)
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
                           static_cast<int64_t>(bytes_transferred));
-  state.counters["columns"] = static_cast<double>(num_columns);
-  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
+  state.counters["columns"]          = static_cast<double>(num_columns);
+  state.counters["bytes"]            = static_cast<double>(bytes_transferred);
+  state.counters["gdsio_write_GiBs"] = GDSIO_WRITE_GIBS;
+  state.counters["gdsio_read_GiBs"]  = GDSIO_READ_GIBS;
 }
 
 // =============================================================================
@@ -571,8 +586,10 @@ void BM_ConvertGpuToDiskStringColumns(benchmark::State& state)
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
                           static_cast<int64_t>(bytes_transferred));
-  state.counters["columns"] = static_cast<double>(num_columns);
-  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
+  state.counters["columns"]          = static_cast<double>(num_columns);
+  state.counters["bytes"]            = static_cast<double>(bytes_transferred);
+  state.counters["gdsio_write_GiBs"] = GDSIO_WRITE_GIBS;
+  state.counters["gdsio_read_GiBs"]  = GDSIO_READ_GIBS;
 }
 
 /**
@@ -610,8 +627,10 @@ void BM_ConvertGpuToDiskListColumns(benchmark::State& state)
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
                           static_cast<int64_t>(bytes_transferred));
-  state.counters["columns"] = static_cast<double>(num_columns);
-  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
+  state.counters["columns"]          = static_cast<double>(num_columns);
+  state.counters["bytes"]            = static_cast<double>(bytes_transferred);
+  state.counters["gdsio_write_GiBs"] = GDSIO_WRITE_GIBS;
+  state.counters["gdsio_read_GiBs"]  = GDSIO_READ_GIBS;
 }
 
 /**
@@ -649,8 +668,10 @@ void BM_ConvertGpuToDiskStructColumns(benchmark::State& state)
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
                           static_cast<int64_t>(bytes_transferred));
-  state.counters["columns"] = static_cast<double>(num_columns);
-  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
+  state.counters["columns"]          = static_cast<double>(num_columns);
+  state.counters["bytes"]            = static_cast<double>(bytes_transferred);
+  state.counters["gdsio_write_GiBs"] = GDSIO_WRITE_GIBS;
+  state.counters["gdsio_read_GiBs"]  = GDSIO_READ_GIBS;
 }
 
 // =============================================================================
@@ -693,9 +714,11 @@ void BM_ConvertGpuToDiskKvikIO(benchmark::State& state)
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
                           static_cast<int64_t>(bytes_transferred));
-  state.counters["columns"] = static_cast<double>(num_columns);
-  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
-  state.counters["backend"] = 0;  // 0 = kvikIO
+  state.counters["columns"]          = static_cast<double>(num_columns);
+  state.counters["bytes"]            = static_cast<double>(bytes_transferred);
+  state.counters["gdsio_write_GiBs"] = GDSIO_WRITE_GIBS;
+  state.counters["gdsio_read_GiBs"]  = GDSIO_READ_GIBS;
+  state.counters["backend"]          = 0;  // 0 = kvikIO
 }
 
 /**
@@ -755,9 +778,11 @@ void BM_ConvertGpuToDiskGDS(benchmark::State& state)
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
                           static_cast<int64_t>(bytes_transferred));
-  state.counters["columns"] = static_cast<double>(num_columns);
-  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
-  state.counters["backend"] = 1;  // 1 = GDS
+  state.counters["columns"]          = static_cast<double>(num_columns);
+  state.counters["bytes"]            = static_cast<double>(bytes_transferred);
+  state.counters["gdsio_write_GiBs"] = GDSIO_WRITE_GIBS;
+  state.counters["gdsio_read_GiBs"]  = GDSIO_READ_GIBS;
+  state.counters["backend"]          = 1;  // 1 = GDS
 }
 
 // =============================================================================
@@ -887,9 +912,11 @@ void BM_ConvertGpuToDiskPipeline(benchmark::State& state)
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
                           static_cast<int64_t>(bytes_transferred));
-  state.counters["columns"] = static_cast<double>(num_columns);
-  state.counters["bytes"]   = static_cast<double>(bytes_transferred);
-  state.counters["backend"] = 2;  // 2 = Pipeline
+  state.counters["columns"]          = static_cast<double>(num_columns);
+  state.counters["bytes"]            = static_cast<double>(bytes_transferred);
+  state.counters["gdsio_write_GiBs"] = GDSIO_WRITE_GIBS;
+  state.counters["gdsio_read_GiBs"]  = GDSIO_READ_GIBS;
+  state.counters["backend"]          = 2;  // 2 = Pipeline
 }
 
 BENCHMARK(BM_ConvertGpuToDiskPipeline)
