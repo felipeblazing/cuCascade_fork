@@ -32,6 +32,7 @@
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/column/column_view.hpp>
+#include <cudf/dictionary/dictionary_factories.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/unary.hpp>
@@ -364,6 +365,7 @@ static bool column_has_data_buffer(const cudf::column_view& col) noexcept
     case cudf::type_id::STRING:
     case cudf::type_id::LIST:
     case cudf::type_id::STRUCT:
+    case cudf::type_id::DICTIONARY32:
     case cudf::type_id::EMPTY: return false;
     default: return true;
   }
@@ -427,6 +429,10 @@ struct BatchCopyAccumulator {
         cudaMemcpyAsync(dsts[i], srcs[i], sizes[i], cudaMemcpyDefault, stream.value()));
     }
 #endif
+    // Clear so subsequent add()+flush() cycles do not resubmit already-issued ops.
+    dsts.clear();
+    srcs.clear();
+    sizes.clear();
   }
 };
 
@@ -680,7 +686,12 @@ static std::unique_ptr<cudf::column> reconstruct_column(
     }
     auto offsets_col = reconstruct_column(meta.children[0], alloc, stream, mr, batch);
     if (offsets_col->type().id() == cudf::type_id::INT32) {
-      offsets_col = cudf::cast(offsets_col->view(), cudf::data_type{cudf::type_id::INT64}, stream, mr);
+      // Flush pending H2D copies so the INT32 offsets buffer has valid data on device
+      // before the cast reads from it. The cast replaces offsets_col, freeing the old
+      // INT32 buffer, so batch must not hold dangling pointers to it.
+      batch.flush(stream, cudaMemcpySrcAccessOrderDuringApiCall);
+      offsets_col =
+        cudf::cast(offsets_col->view(), cudf::data_type{cudf::type_id::INT64}, stream, mr);
     }
     return cudf::make_strings_column(
       meta.num_rows,
@@ -699,7 +710,11 @@ static std::unique_ptr<cudf::column> reconstruct_column(
     }
     auto offsets_col = reconstruct_column(meta.children[0], alloc, stream, mr, batch);
     if (offsets_col->type().id() == cudf::type_id::INT32) {
-      offsets_col = cudf::cast(offsets_col->view(), cudf::data_type{cudf::type_id::INT64}, stream, mr);
+      // Flush pending H2D copies so the INT32 offsets buffer has valid data on device
+      // before the cast reads from it. See STRING branch comment above.
+      batch.flush(stream, cudaMemcpySrcAccessOrderDuringApiCall);
+      offsets_col =
+        cudf::cast(offsets_col->view(), cudf::data_type{cudf::type_id::INT64}, stream, mr);
     }
     return cudf::make_lists_column(meta.num_rows,
                                    std::move(offsets_col),
@@ -714,8 +729,28 @@ static std::unique_ptr<cudf::column> reconstruct_column(
     for (const auto& child_meta : meta.children) {
       fields.push_back(reconstruct_column(child_meta, alloc, stream, mr, batch));
     }
+    if (null_count > 0) {
+      // cudf::make_structs_column calls superimpose_and_sanitize_nulls, which reads
+      // the struct's null mask from the device buffer. Flush pending H2D copies so
+      // the null mask (and children's buffers) have valid data on device.
+      batch.flush(stream, cudaMemcpySrcAccessOrderDuringApiCall);
+    }
     return cudf::make_structs_column(
       meta.num_rows, std::move(fields), null_count, std::move(null_mask));
+  }
+
+  if (meta.type_id == cudf::type_id::DICTIONARY32) {
+    if (meta.children.size() < 2) {
+      throw std::invalid_argument(
+        "reconstruct_column: DICTIONARY32 column metadata must have two children "
+        "(indices, keys)");
+    }
+    // cudf DICTIONARY32 children order: [0]=indices, [1]=keys.
+    // make_dictionary_column parameter order: (keys, indices, ...).
+    auto indices_col = reconstruct_column(meta.children[0], alloc, stream, mr, batch);
+    auto keys_col    = reconstruct_column(meta.children[1], alloc, stream, mr, batch);
+    return cudf::make_dictionary_column(
+      std::move(keys_col), std::move(indices_col), std::move(null_mask), null_count);
   }
 
   const cudf::data_type dtype = cudf::is_fixed_point(cudf::data_type{meta.type_id})
@@ -1369,6 +1404,22 @@ static std::unique_ptr<cudf::column> reconstruct_column_from_disk(
     }
     return cudf::make_structs_column(
       meta.num_rows, std::move(fields), null_count, std::move(null_mask));
+  }
+
+  if (meta.type_id == cudf::type_id::DICTIONARY32) {
+    if (meta.children.size() < 2) {
+      throw std::invalid_argument(
+        "reconstruct_column_from_disk: DICTIONARY32 column metadata must have two children "
+        "(indices, keys)");
+    }
+    // cudf DICTIONARY32 children order: [0]=indices, [1]=keys.
+    // make_dictionary_column parameter order: (keys, indices, ...).
+    auto indices_col =
+      reconstruct_column_from_disk(meta.children[0], file_path, stream, mr, backend);
+    auto keys_col =
+      reconstruct_column_from_disk(meta.children[1], file_path, stream, mr, backend);
+    return cudf::make_dictionary_column(
+      std::move(keys_col), std::move(indices_col), std::move(null_mask), null_count);
   }
 
   const cudf::data_type dtype = cudf::is_fixed_point(cudf::data_type{meta.type_id})

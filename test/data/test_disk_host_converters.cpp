@@ -87,26 +87,25 @@ void round_trip_test(std::unique_ptr<cudf::table> original_table)
 /// Returns a single-column cudf::table.
 std::unique_ptr<cudf::table> make_typed_table(cudf::type_id type, cudf::size_type num_rows)
 {
-  rmm::cuda_stream stream;
   auto const dtype = cudf::data_type{type};
   std::vector<std::unique_ptr<cudf::column>> cols;
   if (cudf::is_numeric(dtype)) {
     // cudf::is_numeric includes BOOL8
     auto col = cudf::make_numeric_column(dtype, num_rows, cudf::mask_state::UNALLOCATED,
-                                         stream.view());
+                                         cudf::get_default_stream());
     cols.push_back(std::move(col));
   } else if (cudf::is_timestamp(dtype)) {
     auto col = cudf::make_timestamp_column(dtype, num_rows, cudf::mask_state::UNALLOCATED,
-                                           stream.view());
+                                           cudf::get_default_stream());
     cols.push_back(std::move(col));
   } else if (cudf::is_duration(dtype)) {
     auto col = cudf::make_duration_column(dtype, num_rows, cudf::mask_state::UNALLOCATED,
-                                          stream.view());
+                                          cudf::get_default_stream());
     cols.push_back(std::move(col));
   } else if (cudf::is_fixed_point(dtype)) {
     auto const fp_dtype = cudf::data_type{type, -2};  // scale = -2
     auto col = cudf::make_fixed_point_column(fp_dtype, num_rows, cudf::mask_state::UNALLOCATED,
-                                             stream.view());
+                                             cudf::get_default_stream());
     cols.push_back(std::move(col));
   }
   return std::make_unique<cudf::table>(std::move(cols));
@@ -116,25 +115,24 @@ std::unique_ptr<cudf::table> make_typed_table(cudf::type_id type, cudf::size_typ
 std::unique_ptr<cudf::table> make_typed_table_with_nulls(cudf::type_id type,
                                                          cudf::size_type num_rows)
 {
-  rmm::cuda_stream stream;
   auto const dtype = cudf::data_type{type};
   std::vector<std::unique_ptr<cudf::column>> cols;
   if (cudf::is_numeric(dtype)) {
-    auto col =
-      cudf::make_numeric_column(dtype, num_rows, cudf::mask_state::ALL_NULL, stream.view());
+    auto col = cudf::make_numeric_column(
+      dtype, num_rows, cudf::mask_state::ALL_NULL, cudf::get_default_stream());
     cols.push_back(std::move(col));
   } else if (cudf::is_timestamp(dtype)) {
-    auto col =
-      cudf::make_timestamp_column(dtype, num_rows, cudf::mask_state::ALL_NULL, stream.view());
+    auto col = cudf::make_timestamp_column(
+      dtype, num_rows, cudf::mask_state::ALL_NULL, cudf::get_default_stream());
     cols.push_back(std::move(col));
   } else if (cudf::is_duration(dtype)) {
-    auto col =
-      cudf::make_duration_column(dtype, num_rows, cudf::mask_state::ALL_NULL, stream.view());
+    auto col = cudf::make_duration_column(
+      dtype, num_rows, cudf::mask_state::ALL_NULL, cudf::get_default_stream());
     cols.push_back(std::move(col));
   } else if (cudf::is_fixed_point(dtype)) {
     auto const fp_dtype = cudf::data_type{type, -2};
-    auto col =
-      cudf::make_fixed_point_column(fp_dtype, num_rows, cudf::mask_state::ALL_NULL, stream.view());
+    auto col = cudf::make_fixed_point_column(
+      fp_dtype, num_rows, cudf::mask_state::ALL_NULL, cudf::get_default_stream());
     cols.push_back(std::move(col));
   }
   return std::make_unique<cudf::table>(std::move(cols));
