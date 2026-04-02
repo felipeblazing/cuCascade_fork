@@ -34,6 +34,7 @@
 #include <cuda_runtime_api.h>
 
 #include <benchmark/benchmark.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <cstring>
@@ -57,6 +58,22 @@ constexpr uint64_t GiB = 1024ULL * MiB;
 constexpr double GDSIO_WRITE_GIBS = 6.73;
 constexpr double GDSIO_READ_GIBS  = 13.35;
 constexpr double GIBS_TO_BYTES    = 1024.0 * 1024.0 * 1024.0;
+
+/**
+ * @brief Flush NVMe write cache and drop OS page cache for a file.
+ *
+ * Call after writes and before reads in benchmark loops to ensure each iteration
+ * measures real disk I/O without OS cache interference.
+ */
+void drop_os_cache(const std::string& path)
+{
+  int fd = ::open(path.c_str(), O_RDONLY);
+  if (fd >= 0) {
+    ::fdatasync(fd);
+    ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+    ::close(fd);
+  }
+}
 
 /**
  * @brief Create a converter registry with the default (Pipeline) backend using O_DIRECT.
@@ -391,6 +408,7 @@ void BM_ConvertGpuToDisk(benchmark::State& state)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
+    drop_os_cache(disk_result->get_disk_table().file_path);
   }
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
@@ -481,6 +499,7 @@ void BM_ConvertHostToDisk(benchmark::State& state)
     auto disk_result =
       registry->convert<disk_data_representation>(*host_rep, disk_space, stream.view());
     stream.synchronize();
+    drop_os_cache(disk_result->get_disk_table().file_path);
   }
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
@@ -574,6 +593,7 @@ void BM_ConvertGpuToDiskStringColumns(benchmark::State& state)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
+    drop_os_cache(disk_result->get_disk_table().file_path);
   }
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
@@ -614,6 +634,7 @@ void BM_ConvertGpuToDiskListColumns(benchmark::State& state)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
+    drop_os_cache(disk_result->get_disk_table().file_path);
   }
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
@@ -654,6 +675,7 @@ void BM_ConvertGpuToDiskStructColumns(benchmark::State& state)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
+    drop_os_cache(disk_result->get_disk_table().file_path);
   }
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
@@ -700,6 +722,7 @@ void BM_ConvertGpuToDiskKvikIO(benchmark::State& state)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
+    drop_os_cache(disk_result->get_disk_table().file_path);
   }
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
@@ -764,6 +787,7 @@ void BM_ConvertGpuToDiskGDS(benchmark::State& state)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
+    drop_os_cache(disk_result->get_disk_table().file_path);
   }
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
@@ -898,6 +922,7 @@ void BM_ConvertGpuToDiskPipeline(benchmark::State& state)
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
+    drop_os_cache(disk_result->get_disk_table().file_path);
   }
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
@@ -966,8 +991,10 @@ void BM_ConvertDiskToGpuKvikIO(benchmark::State& state)
   register_builtin_converters(*registry, std::shared_ptr<idisk_io_backend>(std::move(backend)));
 
   size_t bytes_transferred = disk_rep->get_size_in_bytes();
+  const auto& disk_file   = disk_rep->get_disk_table().file_path;
 
   for ([[maybe_unused]] auto _ : state) {
+    drop_os_cache(disk_file);
     auto gpu_result =
       registry->convert<gpu_table_representation>(*disk_rep, gpu_space, stream.view());
     stream.synchronize();
@@ -1003,8 +1030,10 @@ void BM_ConvertDiskToGpuPipeline(benchmark::State& state)
   register_builtin_converters(*registry, std::shared_ptr<idisk_io_backend>(std::move(backend)));
 
   size_t bytes_transferred = disk_rep->get_size_in_bytes();
+  const auto& disk_file   = disk_rep->get_disk_table().file_path;
 
   for ([[maybe_unused]] auto _ : state) {
+    drop_os_cache(disk_file);
     auto gpu_result =
       registry->convert<gpu_table_representation>(*disk_rep, gpu_space, stream.view());
     stream.synchronize();
@@ -1076,6 +1105,8 @@ void backend_write_benchmark(benchmark::State& state,
     auto disk_result =
       registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
     stream.synchronize();
+    drop_os_cache(disk_result->get_disk_table().file_path);
+    drop_os_cache(disk_result->get_disk_table().file_path);
   }
 
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
@@ -1115,8 +1146,10 @@ void backend_read_benchmark(benchmark::State& state,
   register_builtin_converters(*registry, std::shared_ptr<idisk_io_backend>(std::move(backend)));
 
   size_t bytes_transferred = disk_rep->get_size_in_bytes();
+  const auto& disk_file   = disk_rep->get_disk_table().file_path;
 
   for ([[maybe_unused]] auto _ : state) {
+    drop_os_cache(disk_file);
     auto gpu_result =
       registry->convert<gpu_table_representation>(*disk_rep, gpu_space, stream.view());
     stream.synchronize();
