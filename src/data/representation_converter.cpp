@@ -34,6 +34,7 @@
 #include <cudf/column/column_view.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/strings/strings_column_view.hpp>
+#include <cudf/unary.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/utilities/traits.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
@@ -677,9 +678,13 @@ static std::unique_ptr<cudf::column> reconstruct_column(
       throw std::invalid_argument(
         "reconstruct_column: STRING column metadata must have at least one child (offsets)");
     }
+    auto offsets_col = reconstruct_column(meta.children[0], alloc, stream, mr, batch);
+    if (offsets_col->type().id() == cudf::type_id::INT32) {
+      offsets_col = cudf::cast(offsets_col->view(), cudf::data_type{cudf::type_id::INT64}, stream, mr);
+    }
     return cudf::make_strings_column(
       meta.num_rows,
-      reconstruct_column(meta.children[0], alloc, stream, mr, batch),
+      std::move(offsets_col),
       meta.has_data && meta.data_size > 0
         ? alloc_and_schedule_h2d(alloc, meta.data_offset, meta.data_size, stream, mr, batch)
         : rmm::device_buffer{},
@@ -692,8 +697,12 @@ static std::unique_ptr<cudf::column> reconstruct_column(
       throw std::invalid_argument(
         "reconstruct_column: LIST column metadata must have two children (offsets, values)");
     }
+    auto offsets_col = reconstruct_column(meta.children[0], alloc, stream, mr, batch);
+    if (offsets_col->type().id() == cudf::type_id::INT32) {
+      offsets_col = cudf::cast(offsets_col->view(), cudf::data_type{cudf::type_id::INT64}, stream, mr);
+    }
     return cudf::make_lists_column(meta.num_rows,
-                                   reconstruct_column(meta.children[0], alloc, stream, mr, batch),
+                                   std::move(offsets_col),
                                    reconstruct_column(meta.children[1], alloc, stream, mr, batch),
                                    null_count,
                                    std::move(null_mask));
@@ -1317,9 +1326,15 @@ static std::unique_ptr<cudf::column> reconstruct_column_from_disk(
         "reconstruct_column_from_disk: STRING column metadata must have at least one child "
         "(offsets)");
     }
+    // Reconstruct offsets and cast to INT64 if needed (cudf 26.06+ requires INT64 offsets)
+    auto offsets_col =
+      reconstruct_column_from_disk(meta.children[0], file_path, stream, mr, backend);
+    if (offsets_col->type().id() == cudf::type_id::INT32) {
+      offsets_col = cudf::cast(offsets_col->view(), cudf::data_type{cudf::type_id::INT64}, stream, mr);
+    }
     return cudf::make_strings_column(
       meta.num_rows,
-      reconstruct_column_from_disk(meta.children[0], file_path, stream, mr, backend),
+      std::move(offsets_col),
       meta.has_data && meta.data_size > 0
         ? alloc_and_read_from_disk(file_path, meta.data_offset, meta.data_size, stream, mr, backend)
         : rmm::device_buffer{},
@@ -1333,9 +1348,14 @@ static std::unique_ptr<cudf::column> reconstruct_column_from_disk(
         "reconstruct_column_from_disk: LIST column metadata must have two children (offsets, "
         "values)");
     }
+    auto offsets_col =
+      reconstruct_column_from_disk(meta.children[0], file_path, stream, mr, backend);
+    if (offsets_col->type().id() == cudf::type_id::INT32) {
+      offsets_col = cudf::cast(offsets_col->view(), cudf::data_type{cudf::type_id::INT64}, stream, mr);
+    }
     return cudf::make_lists_column(
       meta.num_rows,
-      reconstruct_column_from_disk(meta.children[0], file_path, stream, mr, backend),
+      std::move(offsets_col),
       reconstruct_column_from_disk(meta.children[1], file_path, stream, mr, backend),
       null_count,
       std::move(null_mask));
@@ -1427,7 +1447,7 @@ static std::unique_ptr<idata_representation> convert_disk_to_gpu(
 
 void register_builtin_converters(representation_converter_registry& registry)
 {
-  register_builtin_converters(registry, make_io_backend(io_backend_type::KVIKIO));
+  register_builtin_converters(registry, make_io_backend(io_backend_type::PIPELINE));
 }
 
 void register_builtin_converters(representation_converter_registry& registry,

@@ -57,15 +57,17 @@ constexpr std::size_t PIPELINE_BUF_SIZE = 64ULL * 1024 * 1024;
 
 class pipeline_io_backend : public idisk_io_backend {
  public:
-  pipeline_io_backend()
+  explicit pipeline_io_backend(bool direct_io) : _direct_io(direct_io)
   {
     CUCASCADE_CUDA_TRY(cudaMallocHost(&_buf[0], PIPELINE_BUF_SIZE));
     CUCASCADE_CUDA_TRY(cudaMallocHost(&_buf[1], PIPELINE_BUF_SIZE));
     CUCASCADE_CUDA_TRY(cudaStreamCreate(&_copy_stream));
+    CUCASCADE_CUDA_TRY(cudaEventCreateWithFlags(&_order_event, cudaEventDisableTiming));
   }
 
   ~pipeline_io_backend() noexcept override
   {
+    cudaEventDestroy(_order_event);
     cudaStreamDestroy(_copy_stream);
     if (_buf[0]) { cudaFreeHost(_buf[0]); }
     if (_buf[1]) { cudaFreeHost(_buf[1]); }
@@ -80,11 +82,17 @@ class pipeline_io_backend : public idisk_io_backend {
                     const void* dev_ptr,
                     std::size_t size,
                     std::size_t file_offset,
-                    [[maybe_unused]] rmm::cuda_stream_view stream) override
+                    rmm::cuda_stream_view stream) override
   {
     if (size == 0) return;
 
-    int fd = ::open(path.c_str(), O_CREAT | O_WRONLY | O_DIRECT, 0644);
+    // Ensure all GPU work on the caller's stream completes before D2H copies begin
+    CUCASCADE_CUDA_TRY(cudaEventRecord(_order_event, stream.value()));
+    CUCASCADE_CUDA_TRY(cudaStreamWaitEvent(_copy_stream, _order_event));
+
+    int flags = O_CREAT | O_WRONLY;
+    if (_direct_io) { flags |= O_DIRECT; }
+    int fd = ::open(path.c_str(), flags, 0644);
     if (fd < 0) {
       CUCASCADE_FAIL("pipeline write_device: open failed: " + std::string(std::strerror(errno)));
     }
@@ -137,11 +145,17 @@ class pipeline_io_backend : public idisk_io_backend {
                    void* dev_ptr,
                    std::size_t size,
                    std::size_t file_offset,
-                   [[maybe_unused]] rmm::cuda_stream_view stream) override
+                   rmm::cuda_stream_view stream) override
   {
     if (size == 0) return;
 
-    int fd = ::open(path.c_str(), O_RDONLY | O_DIRECT, 0);
+    // Ensure caller's stream work completes before we use the destination buffer
+    CUCASCADE_CUDA_TRY(cudaEventRecord(_order_event, stream.value()));
+    CUCASCADE_CUDA_TRY(cudaStreamWaitEvent(_copy_stream, _order_event));
+
+    int flags = O_RDONLY;
+    if (_direct_io) { flags |= O_DIRECT; }
+    int fd = ::open(path.c_str(), flags, 0);
     if (fd < 0) {
       CUCASCADE_FAIL("pipeline read_device: open failed: " + std::string(std::strerror(errno)));
     }
@@ -259,11 +273,17 @@ class pipeline_io_backend : public idisk_io_backend {
    */
   void write_device_batch(const std::string& path,
                           const std::vector<io_batch_entry>& entries,
-                          [[maybe_unused]] rmm::cuda_stream_view stream) override
+                          rmm::cuda_stream_view stream) override
   {
     if (entries.empty()) return;
 
-    int fd = ::open(path.c_str(), O_CREAT | O_WRONLY | O_DIRECT, 0644);
+    // Ensure all GPU work on the caller's stream completes before D2H copies begin
+    CUCASCADE_CUDA_TRY(cudaEventRecord(_order_event, stream.value()));
+    CUCASCADE_CUDA_TRY(cudaStreamWaitEvent(_copy_stream, _order_event));
+
+    int flags = O_CREAT | O_WRONLY;
+    if (_direct_io) { flags |= O_DIRECT; }
+    int fd = ::open(path.c_str(), flags, 0644);
     if (fd < 0) {
       CUCASCADE_FAIL("pipeline write_device_batch: open failed: " +
                      std::string(std::strerror(errno)));
@@ -321,13 +341,15 @@ class pipeline_io_backend : public idisk_io_backend {
  private:
   void* _buf[2]{nullptr, nullptr};
   cudaStream_t _copy_stream{};
+  cudaEvent_t _order_event{};
+  bool _direct_io;
 };
 
 }  // namespace
 
-std::unique_ptr<idisk_io_backend> make_pipeline_io_backend()
+std::unique_ptr<idisk_io_backend> make_pipeline_io_backend(bool direct_io)
 {
-  return std::make_unique<pipeline_io_backend>();
+  return std::make_unique<pipeline_io_backend>(direct_io);
 }
 
 }  // namespace cucascade

@@ -690,7 +690,7 @@ void BM_ConvertGpuToDiskKvikIO(benchmark::State& state)
 
   auto mgr = get_shared_memory_manager();
 
-  auto backend  = make_io_backend(io_backend_type::KVIKIO);
+  auto backend  = make_io_backend(io_backend_type::KVIKIO, /*direct_io=*/true);
   auto registry = std::make_unique<representation_converter_registry>();
   register_builtin_converters(*registry, std::shared_ptr<idisk_io_backend>(std::move(backend)));
 
@@ -888,7 +888,7 @@ void BM_ConvertGpuToDiskPipeline(benchmark::State& state)
 
   auto mgr = get_shared_memory_manager();
 
-  auto backend  = make_io_backend(io_backend_type::PIPELINE);
+  auto backend  = make_io_backend(io_backend_type::PIPELINE, /*direct_io=*/true);
   auto registry = std::make_unique<representation_converter_registry>();
   register_builtin_converters(*registry, std::shared_ptr<idisk_io_backend>(std::move(backend)));
 

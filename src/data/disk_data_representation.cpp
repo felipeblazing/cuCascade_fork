@@ -48,6 +48,11 @@ disk_data_representation::~disk_data_representation() noexcept
 
 std::size_t disk_data_representation::get_size_in_bytes() const { return _disk_table->data_size; }
 
+std::size_t disk_data_representation::get_uncompressed_data_size_in_bytes() const
+{
+  return get_size_in_bytes();
+}
+
 std::unique_ptr<idata_representation> disk_data_representation::clone(
   [[maybe_unused]] rmm::cuda_stream_view stream)
 {

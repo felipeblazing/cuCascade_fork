@@ -26,7 +26,8 @@ namespace cucascade {
 namespace {
 
 /// @brief Number of fixed bytes per serialized column_metadata entry (excluding children).
-static constexpr std::size_t COLUMN_METADATA_FIXED_SIZE = 56;
+/// 4×int32 + 2×uint8 + uint16 pad + 4×uint64 + uint32 num_children + uint32 pad = 60
+static constexpr std::size_t COLUMN_METADATA_FIXED_SIZE = 60;
 
 void serialize_one_column(const memory::column_metadata& col, std::vector<uint8_t>& buf)
 {

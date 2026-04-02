@@ -154,8 +154,12 @@ class idisk_io_backend {
  * @brief Factory function to create an I/O backend of the specified type.
  *
  * @param type The backend type to create.
+ * @param direct_io When true, bypass the OS page cache using O_DIRECT for data I/O.
+ *                  Use true for benchmarking (measures real disk throughput).
+ *                  Use false for production (benefits from OS page cache).
+ *                  Default is false.
  * @return A unique_ptr to the created backend instance.
  */
-std::unique_ptr<idisk_io_backend> make_io_backend(io_backend_type type);
+std::unique_ptr<idisk_io_backend> make_io_backend(io_backend_type type, bool direct_io = false);
 
 }  // namespace cucascade

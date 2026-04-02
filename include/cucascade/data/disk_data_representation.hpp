@@ -58,6 +58,11 @@ class disk_data_representation : public idata_representation {
   [[nodiscard]] std::size_t get_size_in_bytes() const override;
 
   /**
+   * @copydoc idata_representation::get_uncompressed_data_size_in_bytes
+   */
+  std::size_t get_uncompressed_data_size_in_bytes() const override;
+
+  /**
    * @brief Cloning is not supported for disk representations.
    *
    * @throws cucascade::logic_error always.
