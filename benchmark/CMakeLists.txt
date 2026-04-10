@@ -41,7 +41,6 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 # Collect all benchmark sources
 set(BENCHMARK_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark_main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/benchmark_representation_converter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/benchmark_disk_converter.cpp)
 
@@ -65,8 +64,9 @@ target_compile_options(
     ${CUCASCADE_CUDA_WARNING_FLAGS})
 
 # Link dependencies
-target_link_libraries(cucascade_benchmarks
-                      PRIVATE cucascade benchmark::benchmark CUDA::cudart)
+target_link_libraries(
+  cucascade_benchmarks PRIVATE cucascade benchmark::benchmark
+                               benchmark::benchmark_main CUDA::cudart)
 
 # Add custom target to run benchmarks
 add_custom_target(

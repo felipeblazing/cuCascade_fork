@@ -85,6 +85,9 @@ TEST_CASE("generate_disk_file_path produces unique paths", "[disk][io]")
   REQUIRE(path1 != path2);
   REQUIRE(path1.find("batch_") != std::string::npos);
   REQUIRE(path1.find(".cucascade") != std::string::npos);
+  // mkstemps creates the files — clean up
+  std::filesystem::remove(path1);
+  std::filesystem::remove(path2);
 }
 
 // =============================================================================

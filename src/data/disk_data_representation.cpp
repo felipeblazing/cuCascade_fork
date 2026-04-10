@@ -18,9 +18,11 @@
 #include <cucascade/data/disk_data_representation.hpp>
 #include <cucascade/error.hpp>
 
-#include <atomic>
-#include <cstdint>
+#include <unistd.h>
+
+#include <cstdlib>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -69,14 +71,16 @@ const memory::disk_table_allocation& disk_data_representation::get_disk_table() 
 
 namespace memory {
 
-namespace {
-std::atomic<uint64_t> g_disk_file_counter{0};
-}  // namespace
-
 std::string generate_disk_file_path(std::string_view base_path)
 {
-  auto id = g_disk_file_counter.fetch_add(1, std::memory_order_relaxed);
-  return std::filesystem::path(base_path) / ("batch_" + std::to_string(id) + ".cucascade");
+  // Use mkstemps to atomically create a unique file, safe across processes
+  // sharing the same mount path.
+  std::string pattern = std::filesystem::path(base_path) / "batch_XXXXXX.cucascade";
+  int suffix_len      = 10;  // length of ".cucascade"
+  int fd              = ::mkstemps(pattern.data(), suffix_len);
+  if (fd < 0) { throw std::runtime_error("generate_disk_file_path: mkstemps failed"); }
+  ::close(fd);
+  return pattern;
 }
 
 }  // namespace memory

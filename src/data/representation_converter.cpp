@@ -41,6 +41,7 @@
 #include <cudf/utilities/type_dispatcher.hpp>
 
 #include <rmm/aligned.hpp>
+#include <rmm/cuda_device.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/device_uvector.hpp>
 
@@ -252,10 +253,8 @@ std::unique_ptr<idata_representation> convert_host_to_gpu(
   auto& host_table     = host_source.get_host_table();
   auto const data_size = host_table->data_size;
 
-  auto mr             = target_memory_space->get_default_allocator();
-  int previous_device = -1;
-  CUCASCADE_CUDA_TRY(cudaGetDevice(&previous_device));
-  CUCASCADE_CUDA_TRY(cudaSetDevice(target_memory_space->get_device_id()));
+  auto mr = target_memory_space->get_default_allocator();
+  rmm::cuda_set_device_raii device_guard{rmm::cuda_device_id{target_memory_space->get_device_id()}};
 
   rmm::device_buffer dst_buffer(data_size, stream, mr);
   size_t src_block_index      = 0;
@@ -288,7 +287,6 @@ std::unique_ptr<idata_representation> convert_host_to_gpu(
   auto new_table = std::make_unique<cudf::table>(new_table_view, stream, mr);
   stream.synchronize();
 
-  CUCASCADE_CUDA_TRY(cudaSetDevice(previous_device));
   return std::make_unique<gpu_table_representation>(
     std::move(new_table), *const_cast<memory::memory_space*>(target_memory_space));
 }
@@ -836,9 +834,7 @@ std::unique_ptr<idata_representation> convert_host_fast_to_gpu(
     throw std::runtime_error("convert_host_fast_to_gpu: host table allocation is null");
   }
 
-  int previous_device = -1;
-  CUCASCADE_CUDA_TRY(cudaGetDevice(&previous_device));
-  CUCASCADE_CUDA_TRY(cudaSetDevice(target_memory_space->get_device_id()));
+  rmm::cuda_set_device_raii device_guard{rmm::cuda_device_id{target_memory_space->get_device_id()}};
 
   auto mr = target_memory_space->get_default_allocator();
 
@@ -855,7 +851,6 @@ std::unique_ptr<idata_representation> convert_host_fast_to_gpu(
   auto new_table = std::make_unique<cudf::table>(std::move(gpu_columns));
   stream.synchronize();
 
-  CUCASCADE_CUDA_TRY(cudaSetDevice(previous_device));
   return std::make_unique<gpu_table_representation>(
     std::move(new_table), *const_cast<memory::memory_space*>(target_memory_space));
 }
@@ -1442,10 +1437,8 @@ static std::unique_ptr<idata_representation> convert_disk_to_gpu(
   // Column metadata is already in memory — no file header or metadata to read
   const auto& disk_columns = disk_table.columns;
 
-  // Set CUDA device to target GPU
-  int previous_device = -1;
-  CUCASCADE_CUDA_TRY(cudaGetDevice(&previous_device));
-  CUCASCADE_CUDA_TRY(cudaSetDevice(target_memory_space->get_device_id()));
+  // Set CUDA device to target GPU (RAII restores previous device on scope exit)
+  rmm::cuda_set_device_raii device_guard{rmm::cuda_device_id{target_memory_space->get_device_id()}};
 
   auto mr = target_memory_space->get_default_allocator();
 
@@ -1457,8 +1450,6 @@ static std::unique_ptr<idata_representation> convert_disk_to_gpu(
   }
 
   stream.synchronize();
-
-  CUCASCADE_CUDA_TRY(cudaSetDevice(previous_device));
 
   auto new_table = std::make_unique<cudf::table>(std::move(gpu_columns));
   return std::make_unique<gpu_table_representation>(
