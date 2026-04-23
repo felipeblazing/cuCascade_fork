@@ -43,6 +43,57 @@ namespace cucascade {
 std::unique_ptr<idisk_io_backend> make_pipeline_io_backend(bool direct_io = false);
 
 namespace memory {
+namespace {
+
+class fixed_size_host_resource_ref {
+ public:
+  explicit fixed_size_host_resource_ref(fixed_size_host_memory_resource& resource)
+    : resource_(&resource)
+  {
+  }
+
+  void* allocate(cuda::stream_ref stream,
+                 std::size_t bytes,
+                 std::size_t alignment = alignof(std::max_align_t))
+  {
+    return resource_->allocate(stream, bytes, alignment);
+  }
+
+  void deallocate(cuda::stream_ref stream,
+                  void* ptr,
+                  std::size_t bytes,
+                  std::size_t alignment = alignof(std::max_align_t)) noexcept
+  {
+    resource_->deallocate(stream, ptr, bytes, alignment);
+  }
+
+  void* allocate_sync(std::size_t bytes, std::size_t alignment = alignof(std::max_align_t))
+  {
+    return resource_->allocate_sync(bytes, alignment);
+  }
+
+  void deallocate_sync(void* ptr,
+                       std::size_t bytes,
+                       std::size_t alignment = alignof(std::max_align_t)) noexcept
+  {
+    resource_->deallocate_sync(ptr, bytes, alignment);
+  }
+
+  bool operator==(fixed_size_host_resource_ref const& other) const noexcept
+  {
+    return resource_ == other.resource_;
+  }
+
+  friend void get_property(fixed_size_host_resource_ref const&,
+                           cuda::mr::device_accessible) noexcept
+  {
+  }
+
+ private:
+  fixed_size_host_memory_resource* resource_;
+};
+
+}  // namespace
 
 //===----------------------------------------------------------------------===//
 // memory_space Implementation
@@ -65,9 +116,15 @@ memory_space::memory_space(const gpu_memory_space_config& config)
     _allocator = config.mr_factory_fn(config.device_id, config.memory_capacity);
   } else {
     rmm::cuda_set_device_raii set_device(rmm::cuda_device_id{config.device_id});
+#if CUCASCADE_RMM_HAS_MOVABLE_ANY_RESOURCE
     rmm::mr::cuda_async_memory_resource concrete_mr(config.memory_capacity);
     pool_handle = concrete_mr.pool_handle();
     _allocator  = cuda::mr::any_resource<cuda::mr::device_accessible>(std::move(concrete_mr));
+#else
+    auto concrete_mr = std::make_shared<rmm::mr::cuda_async_memory_resource>(config.memory_capacity);
+    pool_handle      = concrete_mr->pool_handle();
+    _allocator       = wrap_legacy_rmm_resource(std::move(concrete_mr));
+#endif
   }
 
   _reservation_allocator = std::make_unique<reservation_aware_resource_adaptor>(
@@ -101,6 +158,9 @@ memory_space::memory_space(const host_memory_space_config& config)
                                                       config.block_size,
                                                       config.pool_size,
                                                       config.initial_number_pools);
+  auto& host_allocator =
+    std::get<std::unique_ptr<fixed_size_host_memory_resource>>(_reservation_allocator);
+  _reservation_allocator_resource.emplace(fixed_size_host_resource_ref{*host_allocator});
 }
 
 memory_space::memory_space(const disk_memory_space_config& config)
@@ -289,8 +349,22 @@ size_t memory_space::get_max_memory() const noexcept { return _memory_limit; }
 
 rmm::device_async_resource_ref memory_space::get_default_allocator() const noexcept
 {
-  return rmm::device_async_resource_ref(
-    const_cast<cuda::mr::any_resource<cuda::mr::device_accessible>&>(_allocator));
+  return std::visit(
+    utils::overloaded{
+      [&](const std::unique_ptr<reservation_aware_resource_adaptor>& mr) {
+        return rmm::device_async_resource_ref{
+          const_cast<reservation_aware_resource_adaptor&>(*mr)};
+      },
+      [&](const std::unique_ptr<fixed_size_host_memory_resource>&) {
+        return rmm::device_async_resource_ref{
+          const_cast<cuda::mr::any_resource<cuda::mr::device_accessible>&>(
+            *_reservation_allocator_resource)};
+      },
+      [&](const std::unique_ptr<disk_access_limiter>&) {
+        return rmm::device_async_resource_ref{
+          const_cast<cuda::mr::any_resource<cuda::mr::device_accessible>&>(_allocator)};
+      }},
+    _reservation_allocator);
 }
 
 std::string_view memory_space::get_disk_mount_path() const
