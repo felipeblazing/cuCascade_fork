@@ -425,12 +425,12 @@ void BM_ConvertGpuToDisk(benchmark::State& state)
   // Create GPU representation
   auto table   = create_benchmark_table_from_bytes(total_bytes, num_columns);
   auto gpu_rep = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space), stream.view());
 
   // Warmup
   auto warmup_table = create_benchmark_table_from_bytes(1 * KiB, 2);
   auto warmup_repr  = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(warmup_table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(warmup_table)), *const_cast<memory_space*>(gpu_space), stream.view());
   auto warmup_result =
     registry->convert<disk_data_representation>(*warmup_repr, disk_space, stream.view());
   stream.synchronize();
@@ -476,7 +476,7 @@ void BM_ConvertDiskToGpu(benchmark::State& state)
   // Create GPU representation then convert to disk once
   auto table   = create_benchmark_table_from_bytes(total_bytes, num_columns);
   auto gpu_rep = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space), stream.view());
 
   auto disk_rep = registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream.view());
   stream.synchronize();
@@ -523,7 +523,7 @@ void BM_ConvertHostToDisk(benchmark::State& state)
   // Create GPU table, convert to host_data first
   auto table   = create_benchmark_table_from_bytes(total_bytes, num_columns);
   auto gpu_rep = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space), stream.view());
 
   auto host_rep = registry->convert<host_data_representation>(*gpu_rep, host_space, stream.view());
   stream.synchronize();
@@ -571,7 +571,7 @@ void BM_ConvertDiskToHost(benchmark::State& state)
   // Create GPU table, convert to host, then to disk
   auto table   = create_benchmark_table_from_bytes(total_bytes, num_columns);
   auto gpu_rep = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space), stream.view());
 
   auto host_rep = registry->convert<host_data_representation>(*gpu_rep, host_space, stream.view());
   stream.synchronize();
@@ -622,7 +622,7 @@ void BM_ConvertGpuToDiskStringColumns(benchmark::State& state)
 
   auto table   = create_string_benchmark_table(total_bytes, num_columns);
   auto gpu_rep = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space), stream.view());
 
   size_t bytes_transferred = gpu_rep->get_size_in_bytes();
 
@@ -664,7 +664,7 @@ void BM_ConvertGpuToDiskListColumns(benchmark::State& state)
 
   auto table   = create_list_benchmark_table(total_bytes, num_columns);
   auto gpu_rep = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space), stream.view());
 
   size_t bytes_transferred = gpu_rep->get_size_in_bytes();
 
@@ -706,7 +706,7 @@ void BM_ConvertGpuToDiskStructColumns(benchmark::State& state)
 
   auto table   = create_struct_benchmark_table(total_bytes, num_columns);
   auto gpu_rep = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space), stream.view());
 
   size_t bytes_transferred = gpu_rep->get_size_in_bytes();
 
@@ -819,7 +819,7 @@ void BM_ConvertGpuToDiskPipeline(benchmark::State& state)
 
   auto table   = create_benchmark_table_from_bytes(total_bytes, num_columns);
   auto gpu_rep = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space), stream.view());
 
   size_t bytes_transferred = gpu_rep->get_size_in_bytes();
 
@@ -866,7 +866,7 @@ std::unique_ptr<disk_data_representation> write_table_to_disk(cudf::table&& tabl
   auto registry = make_benchmark_registry();
 
   auto gpu_rep = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space), stream);
   auto disk_rep = registry->convert<disk_data_representation>(*gpu_rep, disk_space, stream);
   stream.synchronize();
   return disk_rep;
@@ -945,7 +945,7 @@ void pipeline_write_benchmark(benchmark::State& state, TableFactory table_factor
 
   auto table   = table_factory(total_bytes, num_columns);
   auto gpu_rep = std::make_unique<gpu_table_representation>(
-    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space));
+    std::make_unique<cudf::table>(std::move(table)), *const_cast<memory_space*>(gpu_space), stream.view());
 
   size_t bytes_transferred = gpu_rep->get_size_in_bytes();
 
