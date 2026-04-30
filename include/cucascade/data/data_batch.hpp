@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cucascade/data/common.hpp>
+#include <cucascade/data/gpu_data_representation.hpp>
 #include <cucascade/data/representation_converter.hpp>
 #include <cucascade/memory/common.hpp>
 
@@ -292,6 +293,30 @@ class read_only_data_batch {
 
   /** @brief Get a raw pointer to the memory space. */
   memory::memory_space* get_memory_space() const { return _batch->get_memory_space(); }
+
+  /**
+   * @brief Get the writer event from the underlying GPU representation, or nullptr.
+   *
+   * D-B3 proxy: delegates to gpu_table_representation::get_writer_event() via
+   * dynamic_cast. Returns nullptr when the underlying representation is not a
+   * gpu_table_representation (e.g., host or disk tier) or when no writer event has
+   * been recorded yet.
+   *
+   * STREAM-LINEAGE: callers that cross stream / device boundaries should call
+   * cudaStreamWaitEvent on the returned event (when non-null) before reading the
+   * underlying memory of this batch.
+   *
+   * @return cudaEvent_t The writer event, or nullptr if not a GPU representation or
+   *         no event recorded.
+   */
+  [[nodiscard]] cudaEvent_t get_writer_event() const
+  {
+    auto* repr = get_data();
+    if (!repr) { return nullptr; }
+    auto* gpu_repr = dynamic_cast<gpu_table_representation*>(repr);
+    if (!gpu_repr) { return nullptr; }
+    return gpu_repr->get_writer_event();
+  }
 
   // -- Clone operations (D-18/D-19/D-20/CLONE-01/CLONE-02) --
 
