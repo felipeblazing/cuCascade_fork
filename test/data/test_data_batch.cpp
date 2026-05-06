@@ -611,7 +611,6 @@ TEST_CASE("data_batch clone creates independent memory copies", "[data_batch][gp
   }
 }
 
-
 TEST_CASE("data_batch multiple clones are all independent", "[data_batch][gpu]")
 {
   auto gpu_space = make_mock_memory_space(memory::Tier::GPU, 0);
@@ -813,7 +812,6 @@ TEST_CASE("data_batch non-static try_to_mutable fails when read-locked", "[data_
   auto result = batch->try_to_mutable();
   REQUIRE_FALSE(result.has_value());
 }
-
 
 // =============================================================================
 // convert_to stream synchronization tests
@@ -1306,7 +1304,8 @@ TEST_CASE("data_batch concurrent lifecycle: readers then mutable then readers", 
   t1.join();
   t2.join();
 
-  // Validate ordering: readers released before mutable acquired, mutable released before new readers
+  // Validate ordering: readers released before mutable acquired, mutable released before new
+  // readers
   {
     std::lock_guard<std::mutex> guard(events_mutex);
     auto find_idx = [&](const std::string& prefix) -> size_t {
@@ -1518,7 +1517,7 @@ TEST_CASE("read_only_data_batch concurrent copies thread safety", "[data_batch]"
 
   auto ro = batch->to_read_only();
 
-  constexpr int num_threads      = 10;
+  constexpr int num_threads       = 10;
   constexpr int copies_per_thread = 50;
 
   std::vector<std::thread> threads;

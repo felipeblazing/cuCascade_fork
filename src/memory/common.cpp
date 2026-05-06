@@ -36,9 +36,9 @@ namespace {
 // the standard CUDA peer-access APIs all report success but the underlying
 // PCIe/chipset hardware can't actually do peer DMA — cudaMemcpyPeer returns
 // success without moving bytes. The probe catches this empirically.
-constexpr int kMaxDevices = 16;
+constexpr int kMaxDevices                      = 16;
 bool g_p2p_supported[kMaxDevices][kMaxDevices] = {};
-bool g_p2p_probed                             = false;
+bool g_p2p_probed                              = false;
 std::mutex& p2p_probe_mutex()
 {
   static std::mutex m;
@@ -65,16 +65,14 @@ void run_p2p_probe_locked(int device_count)
         continue;
       }
       cudaError_t e = cudaDeviceEnablePeerAccess(j, 0);
-      if (e != cudaSuccess && e != cudaErrorPeerAccessAlreadyEnabled) {
-        (void)cudaGetLastError();
-      }
+      if (e != cudaSuccess && e != cudaErrorPeerAccessAlreadyEnabled) { (void)cudaGetLastError(); }
     }
   }
 
   // Step 2: probe each direction. Allocate tiny test buffers, fill src with a
   // known sentinel, peer-copy, verify dst == src.
-  constexpr std::size_t kProbeBytes      = 64;
-  unsigned char src_pat[kProbeBytes]     = {};
+  constexpr std::size_t kProbeBytes       = 64;
+  unsigned char src_pat[kProbeBytes]      = {};
   unsigned char dst_sentinel[kProbeBytes] = {};
   for (std::size_t k = 0; k < kProbeBytes; ++k) {
     src_pat[k]      = static_cast<unsigned char>(0x40 + (k & 0x3F));
@@ -132,9 +130,7 @@ void run_p2p_probe_locked(int device_count)
       }
       cudaSetDevice(i);
       cudaError_t e = cudaDeviceDisablePeerAccess(j);
-      if (e != cudaSuccess && e != cudaErrorPeerAccessNotEnabled) {
-        (void)cudaGetLastError();
-      }
+      if (e != cudaSuccess && e != cudaErrorPeerAccessNotEnabled) { (void)cudaGetLastError(); }
     }
   }
   cudaSetDevice(0);
@@ -187,8 +183,7 @@ void set_access_on_pool(cudaMemPool_t pool, int owner_device_id, int device_coun
   for (int peer = 0; peer < device_count; ++peer) {
     if (peer == owner_device_id) { continue; }
     int can_access = 0;
-    if (cudaDeviceCanAccessPeer(&can_access, peer, owner_device_id) != cudaSuccess ||
-        !can_access) {
+    if (cudaDeviceCanAccessPeer(&can_access, peer, owner_device_id) != cudaSuccess || !can_access) {
       (void)cudaGetLastError();
       continue;
     }

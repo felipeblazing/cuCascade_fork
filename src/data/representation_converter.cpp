@@ -613,12 +613,12 @@ static rmm::device_buffer alloc_and_peer_copy_async(const void* src_ptr,
   {
     rmm::cuda_set_device_raii src_guard{rmm::cuda_device_id{src_device}};
     rmm::cuda_stream src_stream;
-    CUCASCADE_CUDA_TRY(cudaMemcpyAsync(
-      host_buf, src_ptr, size, cudaMemcpyDeviceToHost, src_stream.view().value()));
+    CUCASCADE_CUDA_TRY(
+      cudaMemcpyAsync(host_buf, src_ptr, size, cudaMemcpyDeviceToHost, src_stream.view().value()));
     src_stream.synchronize();
   }
-  CUCASCADE_CUDA_TRY(cudaMemcpyAsync(
-    buf.data(), host_buf, size, cudaMemcpyHostToDevice, target_stream.value()));
+  CUCASCADE_CUDA_TRY(
+    cudaMemcpyAsync(buf.data(), host_buf, size, cudaMemcpyHostToDevice, target_stream.value()));
   CUCASCADE_CUDA_TRY(cudaStreamSynchronize(target_stream.value()));
   cudaFreeHost(host_buf);
   return buf;
@@ -635,8 +635,8 @@ static rmm::device_buffer alloc_and_peer_copy_sync(const void* src_ptr,
                                                    rmm::cuda_stream_view target_stream,
                                                    rmm::device_async_resource_ref target_mr)
 {
-  auto buf = alloc_and_peer_copy_async(
-    src_ptr, src_device, size, dst_device, target_stream, target_mr);
+  auto buf =
+    alloc_and_peer_copy_async(src_ptr, src_device, size, dst_device, target_stream, target_mr);
   if (size == 0 || src_ptr == nullptr) { return buf; }
   target_stream.synchronize();
   return buf;
@@ -656,20 +656,19 @@ static rmm::device_buffer alloc_and_peer_copy_sync(const void* src_ptr,
  * @note Assumes the source column_view has offset == 0 (no slicing), matching the
  *       same constraint imposed by plan_column_copy() on the GPU↔Host fast path.
  */
-static std::unique_ptr<cudf::column> reconstruct_column_p2p(
-  const cudf::column_view& src,
-  int src_device,
-  int dst_device,
-  rmm::cuda_stream_view stream,
-  rmm::device_async_resource_ref mr)
+static std::unique_ptr<cudf::column> reconstruct_column_p2p(const cudf::column_view& src,
+                                                            int src_device,
+                                                            int dst_device,
+                                                            rmm::cuda_stream_view stream,
+                                                            rmm::device_async_resource_ref mr)
 {
   assert(src.offset() == 0 && "column_view with non-zero offset is not supported");
 
   rmm::device_buffer null_mask{};
   if (src.nullable()) {
     auto const null_mask_size = cudf::bitmask_allocation_size_bytes(src.size());
-    null_mask = alloc_and_peer_copy_sync(
-      src.null_mask(), src_device, null_mask_size, dst_device, stream, mr);
+    null_mask =
+      alloc_and_peer_copy_sync(src.null_mask(), src_device, null_mask_size, dst_device, stream, mr);
   }
   cudf::size_type const null_count = src.nullable() ? src.null_count() : 0;
 
@@ -727,11 +726,8 @@ static std::unique_ptr<cudf::column> reconstruct_column_p2p(
                                               mr);
       }
     }
-    return cudf::make_strings_column(src.size(),
-                                     std::move(offsets_col),
-                                     std::move(chars_buf),
-                                     null_count,
-                                     std::move(null_mask));
+    return cudf::make_strings_column(
+      src.size(), std::move(offsets_col), std::move(chars_buf), null_count, std::move(null_mask));
   }
 
   if (src.type().id() == cudf::type_id::LIST) {
@@ -742,11 +738,8 @@ static std::unique_ptr<cudf::column> reconstruct_column_p2p(
     // Preserve source's offsets type — make_lists_column accepts INT32 or INT64.
     auto offsets_col = reconstruct_column_p2p(src.child(0), src_device, dst_device, stream, mr);
     auto values_col  = reconstruct_column_p2p(src.child(1), src_device, dst_device, stream, mr);
-    return cudf::make_lists_column(src.size(),
-                                   std::move(offsets_col),
-                                   std::move(values_col),
-                                   null_count,
-                                   std::move(null_mask));
+    return cudf::make_lists_column(
+      src.size(), std::move(offsets_col), std::move(values_col), null_count, std::move(null_mask));
   }
 
   if (src.type().id() == cudf::type_id::STRUCT) {
@@ -783,8 +776,7 @@ static std::unique_ptr<cudf::column> reconstruct_column_p2p(
   rmm::device_buffer data_buf{};
   if (src.size() > 0 && src.head() != nullptr) {
     auto const data_size = static_cast<std::size_t>(src.size()) * cudf::size_of(src.type());
-    data_buf            = alloc_and_peer_copy_async(
-      src.head(), src_device, data_size, dst_device, stream, mr);
+    data_buf = alloc_and_peer_copy_async(src.head(), src_device, data_size, dst_device, stream, mr);
   }
   return std::make_unique<cudf::column>(
     src.type(), src.size(), std::move(data_buf), std::move(null_mask), null_count);
@@ -868,8 +860,8 @@ std::unique_ptr<idata_representation> convert_gpu_to_gpu(
   std::vector<std::unique_ptr<cudf::column>> target_columns;
   target_columns.reserve(static_cast<std::size_t>(src_view.num_columns()));
   for (cudf::size_type i = 0; i < src_view.num_columns(); ++i) {
-    target_columns.push_back(reconstruct_column_p2p(
-      src_view.column(i), src_device_id, dst_device_id, target_stream, mr));
+    target_columns.push_back(
+      reconstruct_column_p2p(src_view.column(i), src_device_id, dst_device_id, target_stream, mr));
   }
 
   auto new_table = std::make_unique<cudf::table>(std::move(target_columns));

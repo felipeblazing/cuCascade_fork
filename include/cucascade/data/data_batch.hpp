@@ -99,7 +99,7 @@ class data_batch : public std::enable_shared_from_this<data_batch> {
   uint64_t get_batch_id() const;
 
   /**
-   * @brief Increment the subscriber interest count.   
+   * @brief Increment the subscriber interest count.
    */
   void subscribe();
 
@@ -206,7 +206,7 @@ class data_batch : public std::enable_shared_from_this<data_batch> {
    *
    * Releases the shared lock, then acquires an exclusive lock (may block).
    * The source accessor is consumed via move.
-   * NOTE: The transition is not atomic. 
+   * NOTE: The transition is not atomic.
    *
    * @param accessor Rvalue reference to the read-only accessor (consumed).
    * @return A mutable_data_batch holding the exclusive lock.
@@ -218,7 +218,7 @@ class data_batch : public std::enable_shared_from_this<data_batch> {
    *
    * Releases the exclusive lock, then acquires a shared lock (may block).
    * The source accessor is consumed via move.
-   * NOTE: The transition is not atomic. 
+   * NOTE: The transition is not atomic.
    *
    * @param accessor Rvalue reference to the mutable accessor (consumed).
    * @return A read_only_data_batch holding the shared lock.
@@ -378,8 +378,8 @@ class read_only_data_batch {
   // INVARIANT: _batch must be declared before _lock -- destruction order is load-bearing.
   // When destroyed, _lock releases the shared lock first, then _batch drops the parent
   // reference. This prevents accessing a destroyed mutex.
-  std::shared_ptr<data_batch> _batch;           ///< Parent lifetime (destroyed second)
-  std::shared_lock<std::shared_mutex> _lock;    ///< Shared lock (destroyed first)
+  std::shared_ptr<data_batch> _batch;         ///< Parent lifetime (destroyed second)
+  std::shared_lock<std::shared_mutex> _lock;  ///< Shared lock (destroyed first)
 };
 
 /**
@@ -484,14 +484,13 @@ class mutable_data_batch {
    * @param parent Shared pointer to the parent data_batch (moved in).
    * @param lock   Exclusive lock already acquired on the parent's mutex.
    */
-  mutable_data_batch(std::shared_ptr<data_batch> parent,
-                     std::unique_lock<std::shared_mutex> lock);
+  mutable_data_batch(std::shared_ptr<data_batch> parent, std::unique_lock<std::shared_mutex> lock);
 
   // INVARIANT: _batch must be declared before _lock -- destruction order is load-bearing.
   // When destroyed, _lock releases the exclusive lock first, then _batch drops the parent
   // reference. This prevents accessing a destroyed mutex.
-  std::shared_ptr<data_batch> _batch;           ///< Parent lifetime (destroyed second)
-  std::unique_lock<std::shared_mutex> _lock;    ///< Exclusive lock (destroyed first)
+  std::shared_ptr<data_batch> _batch;         ///< Parent lifetime (destroyed second)
+  std::unique_lock<std::shared_mutex> _lock;  ///< Exclusive lock (destroyed first)
 };
 
 // =============================================================================
