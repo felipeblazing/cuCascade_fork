@@ -194,8 +194,7 @@ void enable_pool_peer_access_for_all_visible_devices(cudaMemPool_t pool, int own
  * @return Number of (i, j) pairs where peer access was disabled because the probe
  *         failed.
  */
-int disable_peer_access_where_broken(
-  std::vector<cudaMemPool_t> const& pools_by_device = {});
+int disable_peer_access_where_broken(std::vector<cudaMemPool_t> const& pools_by_device = {});
 
 cuda::mr::any_resource<cuda::mr::device_accessible, cuda::mr::host_accessible>
 make_default_host_memory_resource(int device_id, std::size_t capacity);

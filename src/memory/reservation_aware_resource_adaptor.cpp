@@ -102,8 +102,8 @@ struct ptds_allocation_tracker : public impl_type::allocation_tracker_iface {
   //
   // Keyed by `this` so each adaptor sees only the reservation state assigned
   // to it. Thread-local storage keeps lookup lock-free within the thread.
-  using state_map =
-    std::unordered_map<ptds_allocation_tracker const*, std::unique_ptr<stream_ordered_tracker_state>>;
+  using state_map = std::unordered_map<ptds_allocation_tracker const*,
+                                       std::unique_ptr<stream_ordered_tracker_state>>;
   static state_map& tls_states() noexcept
   {
     thread_local state_map map;
@@ -123,9 +123,7 @@ struct ptds_allocation_tracker : public impl_type::allocation_tracker_iface {
                                      std::unique_ptr<oom_handling_policy> oom_policy) override
   {
     auto& slot = tls_states()[this];
-    if (slot) {
-      throw rmm::logic_error("Thread already has reservation state set");
-    }
+    if (slot) { throw rmm::logic_error("Thread already has reservation state set"); }
     slot = std::make_unique<stream_ordered_tracker_state>(
       std::move(arena), std::move(policy), std::move(oom_policy));
   }
