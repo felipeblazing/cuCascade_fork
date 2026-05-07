@@ -614,11 +614,19 @@ static rmm::device_buffer alloc_and_peer_copy_async(const void* src_ptr,
   void* host_buf = nullptr;
   CUCASCADE_CUDA_TRY(cudaMallocHost(&host_buf, size));
   {
+    // Phase 22 D-07: same-stream invariant. Issue DtoH on target_stream
+    // (matching rmm::device_buffer::allocate_async at the top of this
+    // function) under cuda_set_device_raii(src_device) for src-side
+    // context. Closes Cluster B sanitizer race shape A
+    // (16/21 of SF1 Q11 num_gpus=2 races per 20-05-INVESTIGATION.md).
     rmm::cuda_set_device_raii src_guard{rmm::cuda_device_id{src_device}};
-    rmm::cuda_stream src_stream;
     CUCASCADE_CUDA_TRY(
-      cudaMemcpyAsync(host_buf, src_ptr, size, cudaMemcpyDeviceToHost, src_stream.view().value()));
-    src_stream.synchronize();
+      cudaMemcpyAsync(host_buf, src_ptr, size, cudaMemcpyDeviceToHost, target_stream.value()));
+    CUCASCADE_CUDA_TRY(cudaStreamSynchronize(target_stream.value()));
+    // Sync inside the src_guard scope: cudaFreeHost (after the closing
+    // brace below) is host-synchronous and must not race with the DtoH
+    // read; the sync also ensures host_buf is fully populated before
+    // the HtoD enqueue executes on target_stream.
   }
   CUCASCADE_CUDA_TRY(
     cudaMemcpyAsync(buf.data(), host_buf, size, cudaMemcpyHostToDevice, target_stream.value()));
