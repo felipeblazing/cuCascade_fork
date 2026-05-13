@@ -628,9 +628,29 @@ static rmm::device_buffer alloc_and_peer_copy_async(const void* src_ptr,
     // read; the sync also ensures host_buf is fully populated before
     // the HtoD enqueue executes on target_stream.
   }
-  CUCASCADE_CUDA_TRY(
-    cudaMemcpyAsync(buf.data(), host_buf, size, cudaMemcpyHostToDevice, target_stream.value()));
-  CUCASCADE_CUDA_TRY(cudaStreamSynchronize(target_stream.value()));
+  {
+    // Phase 23 gap-closure (post-23-05 verification): set dst-device
+    // context active before the HtoD enqueue. The outer
+    // convert_gpu_to_gpu has target_guard{dst_device_id} in scope
+    // (representation_converter.cpp ~line 843) but that guard does
+    // NOT propagate down through reconstruct_column_p2p ->
+    // alloc_and_peer_copy_async on the host-staging branch.
+    //
+    // Without this guard, cudaMemcpyAsync on hosts where peer DMA is
+    // broken (probe_peer_dma_works == false) fails with
+    // cudaErrorInvalidValue when the current device differs from
+    // dst_device (e.g., when called from gpu-to-gpu column-walk on
+    // 2 x RTX 6000 Ada). See 23-VERIFICATION.md gap #1 and
+    // 23-VERDICT.md Section E.
+    //
+    // Same-stream invariant preserved: target_stream is still used
+    // for both the DtoH (above) and HtoD (here) copies — this guard
+    // only sets the CUDA *context*, not the stream.
+    rmm::cuda_set_device_raii dst_guard{rmm::cuda_device_id{dst_device}};
+    CUCASCADE_CUDA_TRY(
+      cudaMemcpyAsync(buf.data(), host_buf, size, cudaMemcpyHostToDevice, target_stream.value()));
+    CUCASCADE_CUDA_TRY(cudaStreamSynchronize(target_stream.value()));
+  }
   cudaFreeHost(host_buf);
   return buf;
 }
