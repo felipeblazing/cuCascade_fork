@@ -47,6 +47,15 @@ std::mutex& p2p_probe_mutex()
 
 void run_p2p_probe_locked(int device_count)
 {
+  // Save the current device so the probe does not clobber the caller's
+  // RAII device guard. The probe issues many raw cudaSetDevice() calls;
+  // without saving the original, it leaves device 0 active. This breaks
+  // subsequent CUDA calls (e.g. cudaEventRecord) that expect the device
+  // to match the RAII guard set in convert_gpu_to_gpu or
+  // alloc_and_peer_copy_async. See Phase 23 Plan 23-07 gap-closure.
+  int saved_device = 0;
+  (void)cudaGetDevice(&saved_device);
+
   // Step 1: enable legacy peer access for all P2P-capable pairs. The probe
   // needs peer access enabled to detect the "lying enable" failure mode —
   // with peer access disabled, cudaMemcpyPeer auto-host-stages and the probe
@@ -133,7 +142,8 @@ void run_p2p_probe_locked(int device_count)
       if (e != cudaSuccess && e != cudaErrorPeerAccessNotEnabled) { (void)cudaGetLastError(); }
     }
   }
-  cudaSetDevice(0);
+  // Restore the device the caller had active before the probe ran.
+  cudaSetDevice(saved_device);
   (void)cudaGetLastError();
 
   // Report.
