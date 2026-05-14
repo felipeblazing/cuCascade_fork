@@ -49,10 +49,9 @@ void run_p2p_probe_locked(int device_count)
 {
   // Save the current device so the probe does not clobber the caller's
   // RAII device guard. The probe issues many raw cudaSetDevice() calls;
-  // without saving the original, it leaves device 0 active. This breaks
-  // subsequent CUDA calls (e.g. cudaEventRecord) that expect the device
-  // to match the RAII guard set in convert_gpu_to_gpu or
-  // alloc_and_peer_copy_async. See Phase 23 Plan 23-07 gap-closure.
+  // without saving the original, it leaves device 0 active and subsequent
+  // CUDA calls (e.g. cudaEventRecord) that expect the RAII-guarded device
+  // will fail.
   int saved_device = 0;
   (void)cudaGetDevice(&saved_device);
 

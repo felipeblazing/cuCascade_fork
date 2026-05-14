@@ -81,7 +81,7 @@ class data_batch : public std::enable_shared_from_this<data_batch> {
   /** @brief Default destructor. */
   ~data_batch() = default;
 
-  // -- Deleted move/copy (D-04/CORE-07) --
+  // -- Deleted move/copy --
   data_batch(data_batch&&)                 = delete;
   data_batch& operator=(data_batch&&)      = delete;
   data_batch(const data_batch&)            = delete;
@@ -230,7 +230,7 @@ class data_batch : public std::enable_shared_from_this<data_batch> {
   friend class read_only_data_batch;
   friend class mutable_data_batch;
 
-  // -- Private data accessors (D-23/CORE-02) --
+  // -- Private data accessors --
   // Only friend accessor classes can call these methods.
 
   /**
@@ -280,7 +280,7 @@ class data_batch : public std::enable_shared_from_this<data_batch> {
  */
 class read_only_data_batch {
  public:
-  // -- Named accessor methods (D-09/ACC-01) --
+  // -- Named accessor methods --
 
   /** @brief Get the batch identifier. */
   uint64_t get_batch_id() const { return _batch->get_batch_id(); }
@@ -393,7 +393,7 @@ class read_only_data_batch {
  */
 class mutable_data_batch {
  public:
-  // -- Read methods (same as read_only, ACC-02) --
+  // -- Read methods (same as read_only) --
 
   /** @brief Get the batch identifier. */
   uint64_t get_batch_id() const { return _batch->get_batch_id(); }
@@ -407,7 +407,7 @@ class mutable_data_batch {
   /** @brief Get a raw pointer to the memory space. */
   memory::memory_space* get_memory_space() const { return _batch->get_memory_space(); }
 
-  // -- Write methods (D-10/ACC-02) --
+  // -- Write methods --
 
   /**
    * @brief Replace the data representation.
@@ -511,7 +511,7 @@ std::shared_ptr<data_batch> read_only_data_batch::clone_to(
   return std::make_shared<data_batch>(new_batch_id, std::move(new_representation));
 }
 
-// -- mutable_data_batch::convert_to (in-place conversion, ACC-02) --
+// -- mutable_data_batch::convert_to (in-place conversion) --
 
 template <typename TargetRepresentation>
 void mutable_data_batch::convert_to(representation_converter_registry& registry,

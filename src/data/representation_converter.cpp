@@ -614,11 +614,11 @@ static rmm::device_buffer alloc_and_peer_copy_async(const void* src_ptr,
   void* host_buf = nullptr;
   CUCASCADE_CUDA_TRY(cudaMallocHost(&host_buf, size));
   {
-    // Phase 22 D-07: same-stream invariant. Issue DtoH on target_stream
-    // (matching rmm::device_buffer::allocate_async at the top of this
-    // function) under cuda_set_device_raii(src_device) for src-side
-    // context. Closes Cluster B sanitizer race shape A
-    // (16/21 of SF1 Q11 num_gpus=2 races per 20-05-INVESTIGATION.md).
+    // Same-stream invariant: issue DtoH on target_stream (matching
+    // rmm::device_buffer::allocate_async at the top of this function) under
+    // cuda_set_device_raii(src_device) for src-side context. Mixing streams
+    // across the allocation/copy boundary trips stream-ordered races under
+    // compute-sanitizer.
     rmm::cuda_set_device_raii src_guard{rmm::cuda_device_id{src_device}};
     CUCASCADE_CUDA_TRY(
       cudaMemcpyAsync(host_buf, src_ptr, size, cudaMemcpyDeviceToHost, target_stream.value()));
@@ -629,12 +629,10 @@ static rmm::device_buffer alloc_and_peer_copy_async(const void* src_ptr,
     // the HtoD enqueue executes on target_stream.
   }
   {
-    // Phase 23 gap-closure (post-23-05 verification): set dst-device
-    // context active before the HtoD enqueue. The outer
-    // convert_gpu_to_gpu has target_guard{dst_device_id} in scope
-    // (representation_converter.cpp ~line 843) but that guard does
-    // NOT propagate down through reconstruct_column_p2p ->
-    // alloc_and_peer_copy_async on the host-staging branch.
+    // Set dst-device context active before the HtoD enqueue. The outer
+    // convert_gpu_to_gpu's target_guard{dst_device_id} does NOT propagate
+    // down through reconstruct_column_p2p -> alloc_and_peer_copy_async on
+    // the host-staging branch.
     //
     // Without this guard, cudaMemcpyAsync on hosts where peer DMA is
     // broken (probe_peer_dma_works == false) fails with
@@ -844,12 +842,12 @@ std::unique_ptr<idata_representation> convert_gpu_to_gpu(
   auto const src_device_id = gpu_source.get_device_id();
   auto const dst_device_id = target_memory_space->get_device_id();
 
-  // STREAM-LINEAGE INVARIANT: cross-device peer copies of cudaMallocAsync allocations
-  // require explicit event-ordered synchronization with the writer stream. A
-  // source-device-wide cudaDeviceSynchronize() does NOT establish the cross-mempool
-  // visibility the driver needs — see project_phase08_fu17.md and Phase 13 race
-  // localization (sanitizer flagged 433 stream-ordered-race errors at this site
-  // even with the brute-force device sync below). Producer-consumer pairing:
+  // STREAM-LINEAGE INVARIANT: cross-device peer copies of cudaMallocAsync
+  // allocations require explicit event-ordered synchronization with the
+  // writer stream. A source-device-wide cudaDeviceSynchronize() does NOT
+  // establish the cross-mempool visibility the driver needs — under
+  // compute-sanitizer this site emits hundreds of stream-ordered-race errors
+  // even with a brute-force device sync. Producer-consumer pairing:
   //   producer = the stream that wrote gpu_source (recorded via
   //              gpu_table_representation::record_writer_event)
   //   consumer = target_stream (acquired from target memory space below)
