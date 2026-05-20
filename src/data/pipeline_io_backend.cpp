@@ -20,6 +20,7 @@
 
 #include <cucascade/data/disk_io_backend.hpp>
 #include <cucascade/error.hpp>
+#include <cucascade/memory/numa_region_pinned_host_allocator.hpp>
 
 #include <cuda_runtime_api.h>
 
@@ -27,9 +28,11 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <mutex>
 #include <string>
@@ -49,6 +52,30 @@ constexpr std::size_t DIRECT_IO_ALIGNMENT = 512;
 std::size_t align_up_dio(std::size_t n)
 {
   return (n + DIRECT_IO_ALIGNMENT - 1) & ~(DIRECT_IO_ALIGNMENT - 1);
+}
+
+/// Best-effort lookup of the NUMA node that the GPU's PCI device is attached to.
+/// Returns -1 if the device id is invalid, the PCI bus id can't be queried, or
+/// /sys/bus/pci/devices/<bus>/numa_node is unreadable / -1. Pure topology query —
+/// no allocation, no side effects.
+int resolve_gpu_numa_node(int device_id) noexcept
+{
+  if (device_id < 0) { return -1; }
+  char pci_buf[32] = {0};
+  if (cudaDeviceGetPCIBusId(pci_buf, sizeof(pci_buf), device_id) != cudaSuccess) { return -1; }
+  // CUDA returns IDs like "0000:65:00.0"; sysfs uses lower-case form.
+  std::string pci(pci_buf);
+  for (auto& c : pci) { c = static_cast<char>(std::tolower(c)); }
+  std::ifstream f("/sys/bus/pci/devices/" + pci + "/numa_node");
+  if (!f.is_open()) { return -1; }
+  std::string content;
+  std::getline(f, content);
+  if (content.empty()) { return -1; }
+  try {
+    return std::stoi(content);
+  } catch (...) {
+    return -1;
+  }
 }
 
 /**
@@ -106,11 +133,18 @@ class drain_and_close {
 
 class pipeline_io_backend : public idisk_io_backend {
  public:
-  explicit pipeline_io_backend(bool direct_io) : _direct_io(direct_io)
+  explicit pipeline_io_backend(bool direct_io, int target_device = -1)
+    : _direct_io(direct_io),
+      _pinned_mr(resolve_gpu_numa_node(target_device), /*make_portable=*/true)
   {
-    // Pinned host buffers are context-independent under UVA — safe to share across GPUs.
-    CUCASCADE_CUDA_TRY(cudaMallocHost(&_buf[0], PIPELINE_BUF_SIZE));
-    CUCASCADE_CUDA_TRY(cudaMallocHost(&_buf[1], PIPELINE_BUF_SIZE));
+    // Allocate as portable+mapped so the buffers are usable from any CUDA context
+    // (required for multi-GPU correctness — without Portable, only the context active
+    // at allocation time gets the fast-path pinned mapping). When target_device is
+    // valid and its NUMA node is known, page-bind to that node via libnuma so D2H/H2D
+    // doesn't cross the inter-socket interconnect. numa_node==-1 falls back to plain
+    // cudaHostAlloc(Portable|Mapped) inside numa_region_pinned_host_memory_resource.
+    _buf[0] = _pinned_mr.allocate_sync(PIPELINE_BUF_SIZE);
+    _buf[1] = _pinned_mr.allocate_sync(PIPELINE_BUF_SIZE);
     // The copy stream and order event are CUDA-context-specific. They are created lazily
     // per device in get_device_resources() so this backend works across multiple GPU
     // contexts within the same process.
@@ -139,8 +173,11 @@ class pipeline_io_backend : public idisk_io_backend {
       cudaStreamDestroy(res.copy_stream);
     }
     cudaSetDevice(saved_dev);
-    if (_buf[0]) { cudaFreeHost(_buf[0]); }
-    if (_buf[1]) { cudaFreeHost(_buf[1]); }
+    // Free via the same allocator that produced the buffers — for NUMA-bound buffers
+    // this dispatches cudaHostUnregister + numa_free; for the -1 fallback path it
+    // dispatches cudaFreeHost.
+    if (_buf[0]) { _pinned_mr.deallocate_sync(_buf[0], PIPELINE_BUF_SIZE); }
+    if (_buf[1]) { _pinned_mr.deallocate_sync(_buf[1], PIPELINE_BUF_SIZE); }
   }
 
   pipeline_io_backend(const pipeline_io_backend&)            = delete;
@@ -468,6 +505,11 @@ class pipeline_io_backend : public idisk_io_backend {
 
   void* _buf[2]{nullptr, nullptr};
   bool _direct_io;
+  // Owns the pinned host buffers below. Declared before _buf usages-by-pointer is fine
+  // (we only call its allocate/deallocate inline in ctor/dtor), but declared before the
+  // mutex/map members so the worker (declared last) is destroyed before this MR is —
+  // ensuring no submitted task is still touching _buf when its pages get unregistered.
+  memory::numa_region_pinned_host_memory_resource _pinned_mr;
   std::mutex _resources_mutex;
   std::unordered_map<int, device_resources> _per_device;
   // Serializes the device read/write paths so concurrent callers don't race on the shared
@@ -485,9 +527,9 @@ class pipeline_io_backend : public idisk_io_backend {
 
 }  // namespace
 
-std::unique_ptr<idisk_io_backend> make_pipeline_io_backend(bool direct_io)
+std::unique_ptr<idisk_io_backend> make_pipeline_io_backend(bool direct_io, int target_device)
 {
-  return std::make_unique<pipeline_io_backend>(direct_io);
+  return std::make_unique<pipeline_io_backend>(direct_io, target_device);
 }
 
 }  // namespace cucascade

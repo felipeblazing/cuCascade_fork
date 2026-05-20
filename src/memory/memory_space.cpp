@@ -40,7 +40,8 @@
 namespace cucascade {
 
 // Forward declaration — defined in src/data/pipeline_io_backend.cpp
-std::unique_ptr<idisk_io_backend> make_pipeline_io_backend(bool direct_io = false);
+std::unique_ptr<idisk_io_backend> make_pipeline_io_backend(bool direct_io    = false,
+                                                           int target_device = -1);
 
 namespace memory {
 namespace {
