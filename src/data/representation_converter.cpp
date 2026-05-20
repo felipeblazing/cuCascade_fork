@@ -28,6 +28,7 @@
 #include <cucascade/memory/disk_table.hpp>
 #include <cucascade/memory/host_table.hpp>
 #include <cucascade/memory/host_table_packed.hpp>
+#include <cucascade/memory/numa_region_pinned_host_allocator.hpp>
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -49,9 +50,11 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <stdexcept>
 
@@ -580,6 +583,31 @@ std::unique_ptr<idata_representation> convert_gpu_to_host_fast(
 // =============================================================================
 
 /**
+ * @brief Best-effort lookup of the NUMA node a GPU's PCI device is attached to.
+ *        Returns -1 if the device id is invalid, the PCI bus id is unknown, or
+ *        /sys/bus/pci/devices/<bus>/numa_node is unreadable / -1. Pure topology
+ *        query — no allocation, no side effects.
+ */
+static int resolve_gpu_numa_node(int device_id) noexcept
+{
+  if (device_id < 0) { return -1; }
+  char pci_buf[32] = {0};
+  if (cudaDeviceGetPCIBusId(pci_buf, sizeof(pci_buf), device_id) != cudaSuccess) { return -1; }
+  std::string pci(pci_buf);
+  for (auto& c : pci) { c = static_cast<char>(std::tolower(c)); }
+  std::ifstream f("/sys/bus/pci/devices/" + pci + "/numa_node");
+  if (!f.is_open()) { return -1; }
+  std::string content;
+  std::getline(f, content);
+  if (content.empty()) { return -1; }
+  try {
+    return std::stoi(content);
+  } catch (...) {
+    return -1;
+  }
+}
+
+/**
  * @brief Allocate a target-side device buffer and copy @p size bytes from @p src_ptr
  * (on @p src_device) into it.
  *
@@ -611,8 +639,16 @@ static rmm::device_buffer alloc_and_peer_copy_async(const void* src_ptr,
   }
 
   // Peer DMA broken — explicitly stage through pinned host memory.
-  void* host_buf = nullptr;
-  CUCASCADE_CUDA_TRY(cudaMallocHost(&host_buf, size));
+  //
+  // Allocate as portable+mapped so the buffer is fast-path accessible from both
+  // src and dst CUDA contexts (plain cudaMallocHost only registers it with the
+  // context active at allocation time, which silently slows down the DtoH on
+  // src_device if it's not the current device). Bind pages to dst_device's NUMA
+  // node — HtoD into dst is the latency-critical leg and benefits most from
+  // local-socket pinned memory. -1 falls back to non-bound portable+mapped.
+  memory::numa_region_pinned_host_memory_resource pinned_mr(resolve_gpu_numa_node(dst_device),
+                                                            /*make_portable=*/true);
+  void* host_buf = pinned_mr.allocate_sync(size);
   {
     // Same-stream invariant: issue DtoH on target_stream (matching
     // rmm::device_buffer::allocate_async at the top of this function) under
@@ -649,7 +685,9 @@ static rmm::device_buffer alloc_and_peer_copy_async(const void* src_ptr,
       cudaMemcpyAsync(buf.data(), host_buf, size, cudaMemcpyHostToDevice, target_stream.value()));
     CUCASCADE_CUDA_TRY(cudaStreamSynchronize(target_stream.value()));
   }
-  cudaFreeHost(host_buf);
+  // Same allocator that produced the buffer; dispatches cudaHostUnregister +
+  // numa_free (NUMA-bound path) or cudaFreeHost (-1 fallback path).
+  pinned_mr.deallocate_sync(host_buf, size);
   return buf;
 }
 
