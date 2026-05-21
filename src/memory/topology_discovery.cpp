@@ -677,7 +677,14 @@ int count_numa_nodes()
 bool topology_discovery::discover(NetworkDeviceVerification net_verification)
 {
   system_topology_info topology;
-  nvmlReturn_t result = nvmlInit_v2();
+  // NVML is initialized exactly once per process via this static-local. Calling
+  // nvmlInit_v2 + nvmlShutdown in sequence (which discover() used to do on every
+  // call) SEGVs on NVIDIA driver 595.58.03 — the second nvmlInit_v2 after a
+  // shutdown lands on a stale internal function pointer in libnvidia-ml.
+  // The driver releases NVML resources at process exit via its own atexit hook,
+  // so we never need to call nvmlShutdown explicitly.
+  static const nvmlReturn_t init_result = nvmlInit_v2();
+  nvmlReturn_t result                   = init_result;
   if (result != NVML_SUCCESS) {
     std::cerr << "Failed to initialize NVML: " << nvmlErrorString(result) << std::endl;
     // Continue anyway to report system info even without GPUs
@@ -786,7 +793,8 @@ bool topology_discovery::discover(NetworkDeviceVerification net_verification)
     topology.gpus.push_back(std::move(gpu));
   }
 
-  if (nvml_available) { nvmlShutdown(); }
+  // Do not call nvmlShutdown here — NVML is initialized once per process via
+  // the static-local in this function. See the comment at the top of discover().
 
   _topology = std::move(topology);
   return true;
