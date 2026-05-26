@@ -16,6 +16,7 @@
  */
 
 #include <cucascade/memory/common.hpp>
+#include <cucascade/memory/fixed_size_host_memory_resource.hpp>
 #include <cucascade/memory/null_device_memory_resource.hpp>
 #include <cucascade/memory/numa_region_pinned_host_allocator.hpp>
 
@@ -23,6 +24,9 @@
 #include <rmm/mr/cuda_async_memory_resource.hpp>
 
 #include <mutex>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
 
 namespace cucascade {
 
@@ -321,6 +325,61 @@ int disable_peer_access_where_broken(std::vector<cudaMemPool_t> const& pools_by_
     }
   }
   return disabled;
+}
+
+// =============================================================================
+// HOST pool registry — lets representation_converter's host-staging fallback
+// borrow blocks from the existing pre-pinned pool instead of calling
+// cudaHostAlloc per cross-GPU transfer.
+// =============================================================================
+namespace {
+std::mutex& host_pool_registry_mutex()
+{
+  static std::mutex m;
+  return m;
+}
+
+std::unordered_map<int, fixed_size_host_memory_resource*>& host_pool_registry()
+{
+  static std::unordered_map<int, fixed_size_host_memory_resource*> r;
+  return r;
+}
+}  // namespace
+
+void register_host_pool(int numa_id, fixed_size_host_memory_resource* pool)
+{
+  if (pool == nullptr) { return; }
+  std::lock_guard<std::mutex> g(host_pool_registry_mutex());
+  auto& reg = host_pool_registry();
+  auto it   = reg.find(numa_id);
+  if (it != reg.end()) {
+    if (it->second == pool) { return; }       // idempotent
+    if (it->second == nullptr) {              // recover slot
+      it->second = pool;
+      return;
+    }
+    throw std::runtime_error("cucascade::memory::register_host_pool: numa_id " +
+                             std::to_string(numa_id) + " already registered with a different pool");
+  }
+  reg.emplace(numa_id, pool);
+}
+
+void unregister_host_pool(int numa_id, fixed_size_host_memory_resource* pool) noexcept
+{
+  std::lock_guard<std::mutex> g(host_pool_registry_mutex());
+  auto& reg = host_pool_registry();
+  auto it   = reg.find(numa_id);
+  if (it != reg.end() && it->second == pool) { reg.erase(it); }
+}
+
+fixed_size_host_memory_resource* find_host_pool(int numa_id) noexcept
+{
+  std::lock_guard<std::mutex> g(host_pool_registry_mutex());
+  auto& reg = host_pool_registry();
+  if (auto it = reg.find(numa_id); it != reg.end()) { return it->second; }
+  // Cross-NUMA fallback: any registered pool. Suboptimal but correct.
+  if (!reg.empty()) { return reg.begin()->second; }
+  return nullptr;
 }
 
 }  // namespace memory

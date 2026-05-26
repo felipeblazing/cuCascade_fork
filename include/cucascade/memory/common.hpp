@@ -204,6 +204,33 @@ make_default_host_memory_resource(int device_id, std::size_t capacity, bool make
 
 DeviceMemoryResourceFactoryFn make_default_allocator_for_tier(Tier tier);
 
+// Forward declaration — fixed_size_host_memory_resource.hpp is heavy.
+class fixed_size_host_memory_resource;
+
+/**
+ * @brief Register a HOST-tier `fixed_size_host_memory_resource` so cross-tier
+ * code paths (notably the peer-DMA-broken host-staging branch in
+ * representation_converter.cpp) can borrow blocks from the pre-pinned pool
+ * instead of calling cudaHostAlloc per transfer.
+ *
+ * Called by memory_space's HOST constructor; unregistered by its destructor.
+ * Idempotent on identical (numa_id, pool) re-registration; a different
+ * non-null pool for the same numa_id throws.
+ */
+void register_host_pool(int numa_id, fixed_size_host_memory_resource* pool);
+
+/**
+ * @brief Unregister a previously registered HOST pool. No-op if not present.
+ */
+void unregister_host_pool(int numa_id, fixed_size_host_memory_resource* pool) noexcept;
+
+/**
+ * @brief Look up a registered HOST pool. Tries the requested numa_id first,
+ * then any registered pool as fallback (cross-NUMA staging is suboptimal but
+ * correct). Returns nullptr if no HOST pool has been registered.
+ */
+[[nodiscard]] fixed_size_host_memory_resource* find_host_pool(int numa_id) noexcept;
+
 }  // namespace memory
 }  // namespace cucascade
 
