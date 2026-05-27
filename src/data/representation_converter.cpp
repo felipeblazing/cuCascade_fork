@@ -571,8 +571,8 @@ std::unique_ptr<idata_representation> convert_gpu_to_host_fast(
   batch.flush(stream, cudaMemcpySrcAccessOrderStream);
   stream.synchronize();
 
-  auto host_alloc = memory::host_table_allocation::create(
-    std::move(allocation), std::move(columns), total_size);
+  auto host_alloc =
+    memory::host_table_allocation::create(std::move(allocation), std::move(columns), total_size);
 
   return std::make_unique<host_data_representation>(
     std::move(host_alloc), const_cast<memory::memory_space*>(target_memory_space));
@@ -594,7 +594,9 @@ static int resolve_gpu_numa_node(int device_id) noexcept
   char pci_buf[32] = {0};
   if (cudaDeviceGetPCIBusId(pci_buf, sizeof(pci_buf), device_id) != cudaSuccess) { return -1; }
   std::string pci(pci_buf);
-  for (auto& c : pci) { c = static_cast<char>(std::tolower(c)); }
+  for (auto& c : pci) {
+    c = static_cast<char>(std::tolower(c));
+  }
   std::ifstream f("/sys/bus/pci/devices/" + pci + "/numa_node");
   if (!f.is_open()) { return -1; }
   std::string content;
