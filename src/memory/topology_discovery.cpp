@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -251,25 +252,27 @@ std::vector<size_t> resolve_visible_gpu_indices(
 }
 
 /**
- * @brief Get NUMA node from /sys for a PCI device.
+ * @brief Get the host NUMA node id with the best memory affinity to a GPU.
  *
- * Reads /sys/bus/pci/devices/<pci>/numa_node. If the file is missing, empty, or
- * cannot be parsed as an integer, returns -1.
+ * Queries NVML's `nvmlDeviceGetMemoryAffinity` with `NVML_AFFINITY_SCOPE_NODE` and
+ * returns the lowest-numbered NUMA node in the resulting bitmask. Same source as
+ * `nvidia-smi topo -m`.
  *
- * @param pci_bus_id PCI bus ID of the device.
- * @return NUMA node number on success; -1 if unavailable.
+ * @param device NVML device handle.
+ * @return NUMA node id on success; -1 if NVML reports no affinity (empty bitmask
+ * or query failure).
+ *
+ * @note `nodeSetSize = 1` (one `unsigned long` = 64 NUMA bits) is sufficient for
+ * any realistic system.
  */
-int get_numa_node_from_sys(std::string const& pci_bus_id)
+int get_numa_node_from_nvml(nvmlDevice_t device)
 {
-  std::string normalized_id = normalize_pci_bus_id(pci_bus_id);
-  std::string path          = "/sys/bus/pci/devices/" + normalized_id + "/numa_node";
-  std::string content       = read_file_content(path);
-  if (content.empty()) { return -1; }
-  try {
-    return std::stoi(content);
-  } catch (...) {
-    return -1;
+  unsigned long nodeset = 0;
+  if (nvmlDeviceGetMemoryAffinity(device, 1, &nodeset, NVML_AFFINITY_SCOPE_NODE) == NVML_SUCCESS &&
+      nodeset != 0) {
+    return std::countr_zero(nodeset);
   }
+  return -1;
 }
 
 /**
@@ -802,7 +805,7 @@ bool topology_discovery::discover(NetworkDeviceVerification net_verification)
         continue;
       }
       std::string parent_pci      = std::string(pci_info.busId);
-      int parent_numa             = get_numa_node_from_sys(parent_pci);
+      int parent_numa             = get_numa_node_from_nvml(device);
       std::string parent_cpu_aff  = get_cpu_affinity_from_sys(parent_pci);
       std::vector<int> parent_cpu = parse_cpu_list(parent_cpu_aff);
       std::vector<std::string> parent_nics =
