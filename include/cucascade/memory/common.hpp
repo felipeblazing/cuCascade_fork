@@ -214,8 +214,9 @@ class fixed_size_host_memory_resource;
  * instead of calling cudaHostAlloc per transfer.
  *
  * Called by memory_space's HOST constructor; unregistered by its destructor.
- * Idempotent on identical (numa_id, pool) re-registration; a different
- * non-null pool for the same numa_id throws.
+ * Multiple pools may be registered against the same numa_id (test fixtures
+ * commonly create overlapping HOST memory_spaces); re-registering the same
+ * pointer is a no-op.
  */
 void register_host_pool(int numa_id, fixed_size_host_memory_resource* pool);
 
@@ -225,9 +226,10 @@ void register_host_pool(int numa_id, fixed_size_host_memory_resource* pool);
 void unregister_host_pool(int numa_id, fixed_size_host_memory_resource* pool) noexcept;
 
 /**
- * @brief Look up a registered HOST pool. Tries the requested numa_id first,
- * then any registered pool as fallback (cross-NUMA staging is suboptimal but
- * correct). Returns nullptr if no HOST pool has been registered.
+ * @brief Look up a registered HOST pool. Returns the most recently registered
+ * pool for the requested numa_id; falls back to any registered pool from any
+ * numa_id (cross-NUMA staging is suboptimal but correct). Returns nullptr if
+ * no HOST pool has been registered.
  */
 [[nodiscard]] fixed_size_host_memory_resource* find_host_pool(int numa_id) noexcept;
 
