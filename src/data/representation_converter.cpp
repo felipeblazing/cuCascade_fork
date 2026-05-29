@@ -67,7 +67,7 @@ namespace cucascade {
 void representation_converter_registry::register_converter_impl(
   const converter_key& key, representation_converter_fn converter)
 {
-  std::lock_guard<std::mutex> lock(_mutex);
+  std::unique_lock lock(_mutex);
 
   if (_converters.find(key) != _converters.end()) {
     std::ostringstream oss;
@@ -81,7 +81,7 @@ void representation_converter_registry::register_converter_impl(
 
 bool representation_converter_registry::has_converter_impl(const converter_key& key) const
 {
-  std::lock_guard<std::mutex> lock(_mutex);
+  std::shared_lock lock(_mutex);
   return _converters.find(key) != _converters.end();
 }
 
@@ -93,7 +93,7 @@ std::unique_ptr<idata_representation> representation_converter_registry::convert
 {
   representation_converter_fn converter;
   {
-    std::lock_guard<std::mutex> lock(_mutex);
+    std::shared_lock lock(_mutex);
 
     auto it = _converters.find(key);
     if (it == _converters.end()) {
@@ -121,13 +121,13 @@ std::unique_ptr<idata_representation> representation_converter_registry::convert
 
 bool representation_converter_registry::unregister_converter_impl(const converter_key& key)
 {
-  std::lock_guard<std::mutex> lock(_mutex);
+  std::unique_lock lock(_mutex);
   return _converters.erase(key) > 0;
 }
 
 void representation_converter_registry::clear()
 {
-  std::lock_guard<std::mutex> lock(_mutex);
+  std::unique_lock lock(_mutex);
   _converters.clear();
 }
 
@@ -232,11 +232,12 @@ std::unique_ptr<idata_representation> convert_host_to_gpu(
     }
   }
 
-  auto new_metadata = std::make_unique<std::vector<uint8_t>>(*host_table->metadata);
   auto new_gpu_data = std::make_unique<rmm::device_buffer>(std::move(dst_buffer));
-  stream.synchronize();
+  // cudf::unpack only reads metadata to produce a non-owning table_view — no GPU work.
+  // Use source metadata directly since it remains alive for the duration of this call.
+  // The H→D memcpy and table copy are on the same stream, so ordering is guaranteed.
   auto new_table_view =
-    cudf::unpack(new_metadata->data(), static_cast<uint8_t const*>(new_gpu_data->data()));
+    cudf::unpack(host_table->metadata->data(), static_cast<uint8_t const*>(new_gpu_data->data()));
   auto new_table = std::make_unique<cudf::table>(new_table_view, stream, mr);
   stream.synchronize();
 
