@@ -164,6 +164,10 @@ memory_space::memory_space(const host_memory_space_config& config)
   auto& host_allocator =
     std::get<std::unique_ptr<fixed_size_host_memory_resource>>(_reservation_allocator);
   _reservation_allocator_resource.emplace(fixed_size_host_resource_ref{*host_allocator});
+  // Register so cross-tier code paths (e.g. representation_converter's
+  // peer-DMA-broken host-staging branch) can borrow blocks from this pool
+  // instead of calling cudaHostAlloc per transfer.
+  register_host_pool(config.numa_id, host_allocator.get());
 }
 
 memory_space::memory_space(const disk_memory_space_config& config)
@@ -202,7 +206,18 @@ memory_space::memory_space(const disk_memory_space_config& config,
     std::make_unique<disk_access_limiter>(_id, _memory_limit, _capacity, config.mount_paths);
 }
 
-memory_space::~memory_space() = default;
+memory_space::~memory_space()
+{
+  // Unregister this memory_space's HOST pool from the cross-tier registry.
+  // No-op for non-HOST tiers and for any partially-constructed instance whose
+  // _reservation_allocator never received a fixed_size_host_memory_resource.
+  if (_id.tier == Tier::HOST) {
+    if (auto* host_alloc =
+          std::get_if<std::unique_ptr<fixed_size_host_memory_resource>>(&_reservation_allocator)) {
+      unregister_host_pool(_id.device_id, host_alloc->get());
+    }
+  }
+}
 
 bool memory_space::operator==(const memory_space& other) const { return _id == other.get_id(); }
 

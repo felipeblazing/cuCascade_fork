@@ -24,8 +24,10 @@
 #include <cucascade/data/gpu_data_representation.hpp>
 #include <cucascade/data/representation_converter.hpp>
 #include <cucascade/error.hpp>
+#include <cucascade/memory/common.hpp>
 #include <cucascade/memory/disk_access_limiter.hpp>
 #include <cucascade/memory/disk_table.hpp>
+#include <cucascade/memory/fixed_size_host_memory_resource.hpp>
 #include <cucascade/memory/host_table.hpp>
 #include <cucascade/memory/host_table_packed.hpp>
 #include <cucascade/memory/numa_region_pinned_host_allocator.hpp>
@@ -55,8 +57,12 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
+#include <vector>
 
 namespace cucascade {
 
@@ -618,11 +624,16 @@ static int resolve_gpu_numa_node(int device_id) noexcept
  * (see ensure_p2p_probed):
  *   - probe says peer DMA works → cudaMemcpyPeerAsync (direct device-to-device
  *     DMA over NVLink / supported PCIe)
- *   - probe says peer DMA broken → explicit host-staged copy through pinned
- *     host memory (consumer Intel chipsets etc. where cudaMemcpyPeer* silently
- *     no-ops). We do the staging ourselves rather than relying on the driver's
- *     auto-fallback, so the correctness path is identical and observable
- *     regardless of driver/CUDA version quirks.
+ *   - probe says peer DMA broken → explicit host-staged copy through the
+ *     pre-pinned HOST memory_space pool (registered by memory_space's HOST
+ *     constructor in register_host_pool). The staging copy chunks across the
+ *     pool's fixed block size (1 MB by default), exactly like
+ *     convert_gpu_to_host. We do the staging ourselves rather than relying on
+ *     the driver's auto-fallback, so the correctness path is identical and
+ *     observable regardless of driver/CUDA version quirks.
+ *
+ *   NEVER calls cudaHostAlloc per transfer — the pool is allocated once at
+ *   memory_reservation_manager construction time.
  */
 static rmm::device_buffer alloc_and_peer_copy_async(const void* src_ptr,
                                                     int src_device,
@@ -641,56 +652,98 @@ static rmm::device_buffer alloc_and_peer_copy_async(const void* src_ptr,
     return buf;
   }
 
-  // Peer DMA broken — explicitly stage through pinned host memory.
+  // Peer DMA broken — stage through the pre-pinned HOST pool.
   //
-  // Allocate as portable+mapped so the buffer is fast-path accessible from both
-  // src and dst CUDA contexts (plain cudaMallocHost only registers it with the
-  // context active at allocation time, which silently slows down the DtoH on
-  // src_device if it's not the current device). Bind pages to dst_device's NUMA
-  // node — HtoD into dst is the latency-critical leg and benefits most from
-  // local-socket pinned memory. -1 falls back to non-bound portable+mapped.
-  memory::numa_region_pinned_host_memory_resource pinned_mr(resolve_gpu_numa_node(dst_device),
-                                                            /*make_portable=*/true);
-  void* host_buf = pinned_mr.allocate_sync(size);
+  // Block layout: the host pool allocates non-contiguous fixed-size blocks
+  // (1 MB by default). We chunk the D2H and H2D legs across blocks just like
+  // convert_gpu_to_host does. Stream-ordering inside the loop preserves the
+  // same-stream invariant the original implementation relied on.
+  memory::fixed_size_host_memory_resource* host_pool =
+    memory::find_host_pool(resolve_gpu_numa_node(dst_device));
+  if (host_pool == nullptr) {
+    // No HOST memory_space has been registered. This should only happen in
+    // standalone test builds that exercise the converter without constructing
+    // a memory_reservation_manager. Fall back to a one-shot pinned allocation
+    // (slow path — preserves correctness, never reached in production Sirius).
+    memory::numa_region_pinned_host_memory_resource mr(resolve_gpu_numa_node(dst_device),
+                                                       /*make_portable=*/true);
+    void* host_buf = mr.allocate_sync(size);
+    {
+      rmm::cuda_set_device_raii src_guard{rmm::cuda_device_id{src_device}};
+      CUCASCADE_CUDA_TRY(
+        cudaMemcpyAsync(host_buf, src_ptr, size, cudaMemcpyDeviceToHost, target_stream.value()));
+      CUCASCADE_CUDA_TRY(cudaStreamSynchronize(target_stream.value()));
+    }
+    {
+      rmm::cuda_set_device_raii dst_guard{rmm::cuda_device_id{dst_device}};
+      CUCASCADE_CUDA_TRY(
+        cudaMemcpyAsync(buf.data(), host_buf, size, cudaMemcpyHostToDevice, target_stream.value()));
+      CUCASCADE_CUDA_TRY(cudaStreamSynchronize(target_stream.value()));
+    }
+    mr.deallocate_sync(host_buf, size);
+    return buf;
+  }
+
+  auto allocation            = host_pool->allocate_multiple_blocks(size);
+  const std::size_t block_sz = allocation->block_size();
+
+  // Pass 1: device-to-host, chunked across blocks. Issued on target_stream
+  // under the src_device CUDA context (matches the same-stream invariant
+  // the original implementation enforced).
   {
-    // Same-stream invariant: issue DtoH on target_stream (matching
-    // rmm::device_buffer::allocate_async at the top of this function) under
-    // cuda_set_device_raii(src_device) for src-side context. Mixing streams
-    // across the allocation/copy boundary trips stream-ordered races under
-    // compute-sanitizer.
     rmm::cuda_set_device_raii src_guard{rmm::cuda_device_id{src_device}};
-    CUCASCADE_CUDA_TRY(
-      cudaMemcpyAsync(host_buf, src_ptr, size, cudaMemcpyDeviceToHost, target_stream.value()));
+    std::size_t block_index  = 0;
+    std::size_t block_offset = 0;
+    std::size_t src_offset   = 0;
+    while (src_offset < size) {
+      const std::size_t remaining  = size - src_offset;
+      const std::size_t bytes_left = block_sz - block_offset;
+      const std::size_t to_copy    = std::min(remaining, bytes_left);
+      std::span<std::byte> block   = allocation->at(block_index);
+      CUCASCADE_CUDA_TRY(cudaMemcpyAsync(block.data() + block_offset,
+                                         static_cast<const std::uint8_t*>(src_ptr) + src_offset,
+                                         to_copy,
+                                         cudaMemcpyDeviceToHost,
+                                         target_stream.value()));
+      src_offset += to_copy;
+      block_offset += to_copy;
+      if (block_offset == block_sz) {
+        ++block_index;
+        block_offset = 0;
+      }
+    }
     CUCASCADE_CUDA_TRY(cudaStreamSynchronize(target_stream.value()));
-    // Sync inside the src_guard scope: cudaFreeHost (after the closing
-    // brace below) is host-synchronous and must not race with the DtoH
-    // read; the sync also ensures host_buf is fully populated before
-    // the HtoD enqueue executes on target_stream.
   }
+
+  // Pass 2: host-to-device, chunked across the same blocks. Switch the CUDA
+  // context to dst_device — same guard the original code documented as
+  // required when peer DMA is broken and the outer guard does not propagate
+  // through the column tree walk.
   {
-    // Set dst-device context active before the HtoD enqueue. The outer
-    // convert_gpu_to_gpu's target_guard{dst_device_id} does NOT propagate
-    // down through reconstruct_column_p2p -> alloc_and_peer_copy_async on
-    // the host-staging branch.
-    //
-    // Without this guard, cudaMemcpyAsync on hosts where peer DMA is
-    // broken (probe_peer_dma_works == false) fails with
-    // cudaErrorInvalidValue when the current device differs from
-    // dst_device (e.g., when called from gpu-to-gpu column-walk on
-    // 2 x RTX 6000 Ada). See 23-VERIFICATION.md gap #1 and
-    // 23-VERDICT.md Section E.
-    //
-    // Same-stream invariant preserved: target_stream is still used
-    // for both the DtoH (above) and HtoD (here) copies — this guard
-    // only sets the CUDA *context*, not the stream.
     rmm::cuda_set_device_raii dst_guard{rmm::cuda_device_id{dst_device}};
-    CUCASCADE_CUDA_TRY(
-      cudaMemcpyAsync(buf.data(), host_buf, size, cudaMemcpyHostToDevice, target_stream.value()));
+    std::size_t block_index  = 0;
+    std::size_t block_offset = 0;
+    std::size_t dst_offset   = 0;
+    while (dst_offset < size) {
+      const std::size_t remaining  = size - dst_offset;
+      const std::size_t bytes_left = block_sz - block_offset;
+      const std::size_t to_copy    = std::min(remaining, bytes_left);
+      std::span<std::byte> block   = allocation->at(block_index);
+      CUCASCADE_CUDA_TRY(cudaMemcpyAsync(static_cast<std::uint8_t*>(buf.data()) + dst_offset,
+                                         block.data() + block_offset,
+                                         to_copy,
+                                         cudaMemcpyHostToDevice,
+                                         target_stream.value()));
+      dst_offset += to_copy;
+      block_offset += to_copy;
+      if (block_offset == block_sz) {
+        ++block_index;
+        block_offset = 0;
+      }
+    }
     CUCASCADE_CUDA_TRY(cudaStreamSynchronize(target_stream.value()));
   }
-  // Same allocator that produced the buffer; dispatches cudaHostUnregister +
-  // numa_free (NUMA-bound path) or cudaFreeHost (-1 fallback path).
-  pinned_mr.deallocate_sync(host_buf, size);
+  // allocation's destructor returns blocks to the host pool — no cudaFreeHost.
   return buf;
 }
 
